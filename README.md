@@ -2,14 +2,6 @@
 
 ZoomInSAR is a modular InSAR processing toolkit organized in two release forms:
 
-- `standalone/`: five self-contained Python packages that can be published as
-  separate GitHub repositories.
-- `pipeline/`: the same five packages together with one-command setup and
-  end-to-end workflow launchers.
-
-No research data, generated outputs, virtual environments, IDE metadata, or
-Python build/cache artifacts are included in this distribution folder.
-
 ## Standalone packages
 
 - `InSAR_KML_Cropper`: crop GAMMA-format interferograms and geolocation rasters
