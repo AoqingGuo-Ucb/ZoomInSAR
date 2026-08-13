@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+Data/
+OUTPUT/
+*.filt
+*.coh
+*.lon
+*.lat
+*.npy
+*.npz

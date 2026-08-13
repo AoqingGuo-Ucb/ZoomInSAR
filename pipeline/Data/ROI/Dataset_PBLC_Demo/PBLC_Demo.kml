@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>PBLC Demo</name>
+<Placemark><name>PBLC Demo extent</name><Polygon><outerBoundaryIs><LinearRing><coordinates>
+-118.3941879272461,33.74951171875,0 -118.37885284423828,33.74951171875,0 -118.37885284423828,33.7634391784668,0 -118.3941879272461,33.7634391784668,0 -118.3941879272461,33.74951171875,0
+</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark></Document></kml>

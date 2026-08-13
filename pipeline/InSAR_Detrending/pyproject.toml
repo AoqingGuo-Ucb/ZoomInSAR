@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insar-detrending"
+version = "1.0.0"
+description = "Robust polynomial trend removal for unwrapped InSAR interferograms"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.23", "matplotlib>=3.6", "rasterio>=1.3", "tqdm>=4.65"]
+license = {text = "MIT"}
+authors = [{name = "GuoAo"}]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+insar-detrend = "insar_detrending.cli:main"
+insar-auto-deformation-mask = "insar_detrending.auto_mask_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

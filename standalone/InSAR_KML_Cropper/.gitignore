@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+
+# Large input/output data are intentionally excluded from Git.
+Data/INT/
+Data/GEO/
+Data/ROI/*/
+Data/DEM/
+*.filt
+*.coh
+*.lon
+*.lat
+*.mli
+*.tif
+*.tar.gz

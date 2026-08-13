@@ -1,0 +1,52 @@
+# Python caches and build outputs
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Virtual environments and editors
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+
+# Processing inputs and generated outputs
+Data/INT/**
+Data/GEO/**
+Data/ROI/**
+Data/DEM/**
+!Data/INT/.gitkeep
+!Data/GEO/.gitkeep
+!Data/ROI/.gitkeep
+!Data/DEM/.gitkeep
+!Data/README.md
+OUTPUT/
+OUTPUT_*/
+**/OUTPUT/
+**/OUTPUT_*/
+
+# InSAR and raster products
+*.int
+*.unw
+*.coh
+*.lon
+*.lat
+*.npy
+*.npz
+*.tif
+*.tiff
+
+# Keep the compact PBLC example distributed with the pipeline.
+!pipeline/Data/ROI/Dataset_PBLC_Demo/
+!pipeline/Data/ROI/Dataset_PBLC_Demo/**
+!pipeline/Data/DEM/rasters_USGS10m/
+!pipeline/Data/DEM/rasters_USGS10m/output_USGS10m.tif
+
+# Logs and operating-system files
+*.log
+*.tmp
+Thumbs.db
+.DS_Store

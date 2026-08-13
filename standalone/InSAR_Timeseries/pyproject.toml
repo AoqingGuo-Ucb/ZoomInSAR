@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insar-timeseries"
+version = "1.0.0"
+description = "Connectivity-preserving SBAS InSAR time-series inversion"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.23", "matplotlib>=3.6", "tqdm>=4.65", "scipy>=1.9", "rasterio>=1.3"]
+license = {text = "MIT"}
+authors = [{name = "GuoAo"}]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+insar-timeseries = "insar_timeseries.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

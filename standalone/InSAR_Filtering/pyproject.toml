@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insar-filtering"
+version = "1.0.0"
+description = "Reproducible nonlocal and coherence-adaptive InSAR phase filtering"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.23", "scipy>=1.9", "matplotlib>=3.6", "tqdm>=4.65"]
+license = {text = "MIT"}
+authors = [{name = "GuoAo"}]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+insar-filter = "insar_filtering.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
