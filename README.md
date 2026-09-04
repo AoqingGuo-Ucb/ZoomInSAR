@@ -37,5 +37,4 @@ needed:
   --no-allow-low-quality-bridges
 ```
 
-See `GITHUB_UPLOAD.md` for the recommended repository publication workflow.
 
