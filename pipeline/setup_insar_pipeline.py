@@ -17,14 +17,21 @@ PROJECTS = (
 )
 
 
+def venv_python(environment: Path) -> Path:
+    """Return the virtual-environment Python on Windows, macOS, or Linux."""
+    candidates = (environment / "Scripts" / "python.exe", environment / "bin" / "python")
+    return next((path for path in candidates if path.exists()), candidates[0])
+
+
 def main() -> None:
     for index, name in enumerate(PROJECTS, 1):
         project = ROOT / name
         environment = project / ".venv"
-        python = environment / "Scripts" / "python.exe"
+        python = venv_python(environment)
         print(f"\n[{index}/{len(PROJECTS)}] Setting up {name}", flush=True)
         if not python.exists():
             subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+            python = venv_python(environment)
         subprocess.run([str(python), "-m", "pip", "install", "-e", str(project)], check=True)
     print("\nAll InSAR environments are ready.")
 

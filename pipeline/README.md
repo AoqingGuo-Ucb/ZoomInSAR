@@ -27,6 +27,40 @@ in red on time-series figures.
 
 Use `python run_insar_pipeline.py --help` for all parameters.
 
+## Run from SWEETS GeoTIFF outputs
+
+SWEETS products can be passed directly to the same post-processing chain. The
+workflow recursively finds wrapped-phase/interferogram GeoTIFFs and matching
+coherence GeoTIFFs, derives the longitude/latitude grids from GeoTIFF metadata,
+and then uses the existing filtering, unwrapping, detrending, and time-series
+stages. The source GeoTIFFs are never modified.
+
+To process the full SWEETS extent (no ROI crop):
+
+```powershell
+.\run_insar_pipeline.cmd --source sweets --sweets-dir D:\SWEETS\Prima\work\dolphin --dataset Prima
+```
+
+On macOS/Linux, run the same options with `python3 run_insar_pipeline.py` from
+the `pipeline` directory. The setup script now recognizes both Windows and
+macOS/Linux virtual-environment layouts.
+
+`--no-crop` is an explicit equivalent if you prefer to state that choice.
+
+To crop only when you want an ROI, add a KML:
+
+```powershell
+.\run_insar_pipeline.cmd --source sweets --sweets-dir D:\SWEETS\Prima\work\dolphin --dataset Prima --crop-kml D:\ROI\landfill.kml
+```
+
+The importer recognizes filenames containing `int`, `ifg`, `interferogram`,
+`wrapped`, or `phase` as wrapped phase and filenames containing `coh`,
+`coherence`, `corr`, or `correlation` as coherence. If a SWEETS version uses
+another convention, narrow the search with `--sweets-phase-pattern` and
+`--sweets-coherence-pattern`. By default it uses `dem.tif` in the supplied
+SWEETS directory (or its parent) when present; use `--sweets-dem` to supply
+another DEM.
+
 ## Input data
 
 See `Data/README.md`. Large research data and generated outputs are deliberately

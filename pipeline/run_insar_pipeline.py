@@ -25,11 +25,43 @@ def run(label: str, python: Path, module: str, cwd: Path, arguments: list[str]) 
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def venv_python(project: Path) -> Path:
+    """Return the virtual-environment Python on Windows, macOS, or Linux."""
+    candidates = (project / ".venv" / "Scripts" / "python.exe", project / ".venv" / "bin" / "python")
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the complete InSAR crop, filter, unwrap, detrend, and time-series workflow"
     )
     parser.add_argument("--dataset", help="Optional single Dataset_* directory name for the full workflow")
+    parser.add_argument(
+        "--source", choices=("gamma", "sweets"), default="gamma",
+        help="Input format: existing GAMMA binaries (default) or SWEETS GeoTIFF products.",
+    )
+    parser.add_argument("--sweets-dir", help="SWEETS work/output directory containing wrapped-phase and coherence GeoTIFFs")
+    parser.add_argument(
+        "--sweets-phase-pattern", default="*.tif*",
+        help="Recursive glob used to locate SWEETS wrapped-phase GeoTIFFs.",
+    )
+    parser.add_argument(
+        "--sweets-coherence-pattern", default="*.tif*",
+        help="Recursive glob used to locate SWEETS coherence GeoTIFFs.",
+    )
+    crop_choice = parser.add_mutually_exclusive_group()
+    crop_choice.add_argument(
+        "--crop-kml",
+        help="KML used to crop SWEETS input.",
+    )
+    crop_choice.add_argument(
+        "--no-crop", action="store_true",
+        help="Process the full SWEETS GeoTIFF extent (the default for --source sweets).",
+    )
+    parser.add_argument(
+        "--sweets-dem",
+        help="Optional DEM for SWEETS processing. If omitted, <sweets-dir>/dem.tif is used when present.",
+    )
     parser.add_argument(
         "--compute-dataset",
         help=(
@@ -200,10 +232,20 @@ def main() -> None:
     args = parser.parse_args()
 
     crop_dataset = dataset_name(args.dataset)
+    if args.source == "sweets" and not args.sweets_dir:
+        parser.error("--sweets-dir is required when --source sweets")
+    if args.source == "sweets" and not crop_dataset:
+        parser.error("--dataset is required when --source sweets")
     compute_dataset = dataset_name(args.compute_dataset) or crop_dataset
     dataset_args = ["--dataset", compute_dataset] if compute_dataset else []
     pair_args = ["--pair", args.pair] if args.pair else []
-    dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
+    default_dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
+    sweets_path = Path(args.sweets_dir) if args.sweets_dir else None
+    inferred_sweets_dem = next(
+        (path for path in ((sweets_path / "dem.tif"), (sweets_path.parent / "dem.tif")) if path.is_file()),
+        default_dem,
+    ) if sweets_path else default_dem
+    dem = Path(args.sweets_dem) if args.sweets_dem else inferred_sweets_dem
 
     unwrap_dir = ROOT / "InSAR_Unwrapping"
     cropper_dir = ROOT / "InSAR_KML_Cropper"
@@ -211,7 +253,24 @@ def main() -> None:
     detrend_dir = ROOT / "InSAR_Detrending"
     timeseries_dir = ROOT / "InSAR_Timeseries"
 
-    if not args.skip_cropper:
+    if args.source == "sweets":
+        run(
+            "1/5  SWEETS GeoTIFF Import" + (" + ROI crop" if args.crop_kml else " (no ROI crop)"),
+            venv_python(cropper_dir),
+            "insar_kml_cropper", cropper_dir,
+            [
+                "--data-dir", str(ROOT / "Data"),
+                "--sweets-dir", str(args.sweets_dir),
+                "--dataset", crop_dataset,
+                "--phase-pattern", args.sweets_phase_pattern,
+                "--coherence-pattern", args.sweets_coherence_pattern,
+                "--margin", str(args.margin),
+                "--overwrite",
+                *( ["--no-crop"] if args.no_crop else [] ),
+                *(["--crop-kml", str(args.crop_kml)] if args.crop_kml else []),
+            ],
+        )
+    elif not args.skip_cropper:
         crop_arguments = [
             "--data-dir", str(ROOT / "Data"),
             "--margin", str(args.margin),
@@ -223,14 +282,14 @@ def main() -> None:
             crop_arguments.extend(["--kml", str(ROOT / "Data" / "ROI" / f"{roi_name}.kml")])
         run(
             "1/5  InSAR KML Cropper",
-            cropper_dir / ".venv" / "Scripts" / "python.exe",
+            venv_python(cropper_dir),
             "insar_kml_cropper", cropper_dir, crop_arguments,
         )
 
     if not args.skip_filtering:
         run(
             "2/5  InSAR Filtering",
-            filtering_dir / ".venv" / "Scripts" / "python.exe",
+            venv_python(filtering_dir),
             "insar_filtering", filtering_dir,
             [
                 "--roi-dir", str(ROOT / "Data" / "ROI"),
@@ -249,7 +308,7 @@ def main() -> None:
         input_option = "--filtered-root" if args.input_source == "filtered" else "--roi-dir"
         run(
             "3/5  InSAR Unwrapping",
-            unwrap_dir / ".venv" / "Scripts" / "python.exe",
+            venv_python(unwrap_dir),
             "insar_unwrapping", unwrap_dir,
             [
                 "--input-source", args.input_source,
@@ -268,7 +327,7 @@ def main() -> None:
             auto_mask_output = detrend_dir / "OUTPUT_auto_masks"
             run(
                 "3.5/5  Preliminary Time Series for Auto Exclude Mask",
-                timeseries_dir / ".venv" / "Scripts" / "python.exe",
+                venv_python(timeseries_dir),
                 "insar_timeseries", timeseries_dir,
                 [
                     "--input-source", "unwrapping",
@@ -287,7 +346,7 @@ def main() -> None:
             for mask_dataset in mask_datasets:
                 run(
                     f"3.6/5  Auto Deformation Exclude Mask ({mask_dataset})",
-                    detrend_dir / ".venv" / "Scripts" / "python.exe",
+                    venv_python(detrend_dir),
                     "insar_detrending.auto_mask_cli", detrend_dir,
                     [
                         "--timeseries-root", str(preliminary_output),
@@ -313,7 +372,7 @@ def main() -> None:
             )
             run(
                 f"4/5  InSAR Detrending{f' ({detrend_dataset})' if detrend_dataset else ''}",
-                detrend_dir / ".venv" / "Scripts" / "python.exe",
+                venv_python(detrend_dir),
                 "insar_detrending", detrend_dir,
                 [
                 "--unwrapping-root", str(unwrap_dir / "OUTPUT"),
@@ -351,7 +410,7 @@ def main() -> None:
     if not args.skip_timeseries:
         run(
             "5/5  InSAR Timeseries",
-            timeseries_dir / ".venv" / "Scripts" / "python.exe",
+            venv_python(timeseries_dir),
             "insar_timeseries", timeseries_dir,
             [
                 "--input-source", "detrending",
