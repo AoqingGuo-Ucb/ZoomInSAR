@@ -246,7 +246,15 @@ def main() -> None:
     default_dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
     sweets_path = Path(args.sweets_dir) if args.sweets_dir else None
     inferred_sweets_dem = next(
-        (path for path in ((sweets_path / "dem.tif"), (sweets_path.parent / "dem.tif")) if path.is_file()),
+        (
+            path
+            for path in (
+                sweets_path / "dem.tif",
+                sweets_path.parent / "dem.tif",
+                sweets_path.parent.parent / "dem.tif",
+            )
+            if path.is_file()
+        ),
         default_dem,
     ) if sweets_path else default_dem
     dem = Path(args.sweets_dem) if args.sweets_dem else inferred_sweets_dem
