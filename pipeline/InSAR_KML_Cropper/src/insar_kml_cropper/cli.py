@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     crop_choice = parser.add_mutually_exclusive_group()
     crop_choice.add_argument("--crop-kml", help="KML used to crop SWEETS input")
     crop_choice.add_argument("--no-crop", action="store_true", help="Import the complete SWEETS grid (the default)")
+    parser.add_argument(
+        "--skip-unpaired", action="store_true",
+        help="Exclude SWEETS interferograms that do not have both phase and coherence GeoTIFFs.",
+    )
     return parser
 
 
@@ -41,6 +45,7 @@ def main() -> None:
             args.sweets_dir, Path(args.data_dir) / "ROI", args.dataset,
             phase_pattern=args.phase_pattern, coherence_pattern=args.coherence_pattern,
             crop_kml=args.crop_kml, margin=args.margin, overwrite=args.overwrite,
+            skip_unpaired=args.skip_unpaired,
         )
         print(f"Created: {output}")
         return

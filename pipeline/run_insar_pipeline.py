@@ -49,6 +49,10 @@ def main() -> None:
         "--sweets-coherence-pattern", default="*.tif*",
         help="Recursive glob used to locate SWEETS coherence GeoTIFFs.",
     )
+    parser.add_argument(
+        "--sweets-skip-unpaired", action="store_true",
+        help="Exclude SWEETS interferograms lacking a matching coherence GeoTIFF.",
+    )
     crop_choice = parser.add_mutually_exclusive_group()
     crop_choice.add_argument(
         "--crop-kml",
@@ -266,6 +270,7 @@ def main() -> None:
                 "--coherence-pattern", args.sweets_coherence_pattern,
                 "--margin", str(args.margin),
                 "--overwrite",
+                *(["--skip-unpaired"] if args.sweets_skip_unpaired else []),
                 *( ["--no-crop"] if args.no_crop else [] ),
                 *(["--crop-kml", str(args.crop_kml)] if args.crop_kml else []),
             ],

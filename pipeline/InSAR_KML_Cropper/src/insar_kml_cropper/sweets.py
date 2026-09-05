@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -118,6 +119,7 @@ def import_sweets_dataset(
     crop_kml: str | Path | None = None,
     margin: float = 0.20,
     overwrite: bool = False,
+    skip_unpaired: bool = False,
 ) -> Path:
     """Create a ``Dataset_*`` directory consumable by existing ZoomInSAR stages.
 
@@ -137,8 +139,23 @@ def import_sweets_dataset(
     phase_files = _discover(sweets_dir, phase_pattern, "phase")
     coherence_files = _discover(sweets_dir, coherence_pattern, "coherence")
     missing = sorted(set(phase_files) ^ set(coherence_files))
+    if missing and not skip_unpaired:
+        raise FileNotFoundError(
+            "SWEETS phase/coherence pairs do not match: "
+            f"{missing}. Use --skip-unpaired only when intentionally excluding "
+            "interferograms without coherence."
+        )
     if missing:
-        raise FileNotFoundError(f"SWEETS phase/coherence pairs do not match: {missing}")
+        warnings.warn(
+            f"Excluding {len(missing)} SWEETS interferogram(s) without matching "
+            "phase/coherence products; details are recorded in crop_metadata.json.",
+            stacklevel=2,
+        )
+        common_pairs = set(phase_files) & set(coherence_files)
+        phase_files = {pair: path for pair, path in phase_files.items() if pair in common_pairs}
+        coherence_files = {pair: path for pair, path in coherence_files.items() if pair in common_pairs}
+    if not phase_files:
+        raise FileNotFoundError("No complete SWEETS phase/coherence pairs were found")
 
     first_pair = sorted(phase_files)[0]
     first_phase, profile = _read_phase(phase_files[first_pair])
@@ -169,6 +186,7 @@ def import_sweets_dataset(
         "sweets_directory": str(sweets_dir.resolve()),
         "phase_pattern": phase_pattern,
         "coherence_pattern": coherence_pattern,
+        "skipped_unpaired_pairs": [f"{first}-{second}" for first, second in missing],
         "source_shape_lines_width": list(profile["shape"]),
         "output_shape_lines_width": list(output_shape),
         "crop_kml": str(crop_path.resolve()) if crop_path else None,

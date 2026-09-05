@@ -62,6 +62,12 @@ another convention, narrow the search with `--sweets-phase-pattern` and
 SWEETS directory (or its parent) when present; use `--sweets-dem` to supply
 another DEM.
 
+Some SWEETS networks contain long-baseline `*.int.tif` files without an
+associated `*.int.cor.tif` coherence product. The default stops and lists these
+pairs, because unwrapping requires coherence. If you intentionally want to
+process only the complete pairs, add `--sweets-skip-unpaired`; excluded pairs
+are written to `crop_metadata.json` for traceability.
+
 ## Input data
 
 See `Data/README.md`. Large research data and generated outputs are deliberately
