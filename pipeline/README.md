@@ -62,6 +62,10 @@ another convention, narrow the search with `--sweets-phase-pattern` and
 SWEETS directory (or its parent) when present; use `--sweets-dem` to supply
 another DEM.
 
+SWEETS auxiliary rasters such as `temporal_coherence_*`, `similarity_*`, and
+`shp_counts_*` are ignored automatically; they are quality layers, not
+individual wrapped interferograms or pairwise coherence inputs.
+
 Some SWEETS networks contain long-baseline `*.int.tif` files without an
 associated `*.int.cor.tif` coherence product. The default stops and lists these
 pairs, because unwrapping requires coherence. If you intentionally want to

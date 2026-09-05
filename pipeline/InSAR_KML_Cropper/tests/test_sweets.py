@@ -4,7 +4,7 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from insar_kml_cropper.sweets import import_sweets_dataset
+from insar_kml_cropper.sweets import _discover, import_sweets_dataset
 
 
 def _write(path: Path, values: np.ndarray) -> None:
@@ -31,3 +31,14 @@ def test_import_sweets_phase_and_coherence_without_crop(tmp_path: Path):
     np.testing.assert_allclose(result_phase, np.exp(1j * phase))
     np.testing.assert_allclose(result_coherence, coherence)
     np.testing.assert_allclose(longitude[0], [-117.995, -117.985])
+
+
+def test_discovery_ignores_sweets_auxiliary_quality_rasters(tmp_path: Path):
+    (tmp_path / "20200101_20200113.int.tif").touch()
+    (tmp_path / "20200101_20200113.int.cor.tif").touch()
+    (tmp_path / "temporal_coherence_20160109_20160707.tif").touch()
+    (tmp_path / "shp_counts_20160109_20160707.tif").touch()
+    (tmp_path / "similarity_20160109_20160707.tif").touch()
+
+    assert set(_discover(tmp_path, "*.tif", "phase")) == {("20200101", "20200113")}
+    assert set(_discover(tmp_path, "*.tif", "coherence")) == {("20200101", "20200113")}

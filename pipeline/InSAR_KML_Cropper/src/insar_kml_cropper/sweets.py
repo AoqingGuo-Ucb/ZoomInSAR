@@ -21,6 +21,10 @@ _COHERENCE = re.compile(
     re.IGNORECASE,
 )
 _PHASE = re.compile(r"(?:^|[_\-.])(int|ifg|interferogram|wrapped|phase)(?=[_\-.]|$)", re.IGNORECASE)
+_AUXILIARY = re.compile(
+    r"(?:^|[_\-.])(?:temporal[_\-.]?coherence|similarity|shp[_\-.]?counts)(?=[_\-.]|$)",
+    re.IGNORECASE,
+)
 
 
 def _pair(path: Path) -> tuple[str, str]:
@@ -35,6 +39,10 @@ def _discover(root: Path, pattern: str, kind: str) -> dict[tuple[str, str], Path
     selected: dict[tuple[str, str], Path] = {}
     for path in candidates:
         name = path.name
+        # Dolphin/SWEETS also writes quality layers with date pairs.  They are
+        # not pairwise coherence rasters and must never enter this workflow.
+        if _AUXILIARY.search(name):
+            continue
         # SWEETS commonly writes ``<pair>.int.tif`` and
         # ``<pair>.int.cor.tif``.  Test the compound suffix first so the
         # ``int`` token in the coherence filename can never be mistaken for
