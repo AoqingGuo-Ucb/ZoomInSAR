@@ -15,7 +15,10 @@ from .kml import expand_bounds, kml_bounds
 
 
 _PAIR = re.compile(r"(?<!\d)(\d{8})[-_](\d{8})(?!\d)")
-_COHERENCE = re.compile(r"(?:coh|coherence|corr|correlation)", re.IGNORECASE)
+_COHERENCE = re.compile(
+    r"(?:^|[_\-.])(?:coh(?:erence)?|corr(?:elation)?|cor)(?=[_\-.]|$)",
+    re.IGNORECASE,
+)
 _PHASE = re.compile(r"(?:^|[_\-.])(int|ifg|interferogram|wrapped|phase)(?=[_\-.]|$)", re.IGNORECASE)
 
 
@@ -31,7 +34,16 @@ def _discover(root: Path, pattern: str, kind: str) -> dict[tuple[str, str], Path
     selected: dict[tuple[str, str], Path] = {}
     for path in candidates:
         name = path.name
-        is_coherence = bool(_COHERENCE.search(name))
+        # SWEETS commonly writes ``<pair>.int.tif`` and
+        # ``<pair>.int.cor.tif``.  Test the compound suffix first so the
+        # ``int`` token in the coherence filename can never be mistaken for
+        # a second phase product.
+        suffixes = "".join(path.suffixes).lower()
+        is_coherence = (
+            suffixes.endswith(".int.cor.tif")
+            or suffixes.endswith(".int.cor.tiff")
+            or bool(_COHERENCE.search(name))
+        )
         is_phase = bool(_PHASE.search(name)) and not is_coherence
         if (kind == "coherence" and not is_coherence) or (kind == "phase" and not is_phase):
             continue

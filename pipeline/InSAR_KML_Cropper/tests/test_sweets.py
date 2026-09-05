@@ -21,7 +21,7 @@ def test_import_sweets_phase_and_coherence_without_crop(tmp_path: Path):
     phase = np.array([[0.0, np.pi / 2], [-np.pi / 2, np.pi]], dtype=np.float32)
     coherence = np.array([[0.2, 0.5], [0.8, 1.0]], dtype=np.float32)
     _write(source / "20200101_20200113_int.tif", phase)
-    _write(source / "20200101_20200113_coh.tif", coherence)
+    _write(source / "20200101_20200113_int.cor.tif", coherence)
 
     dataset = import_sweets_dataset(source, tmp_path / "ROI", "example")
 

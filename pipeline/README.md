@@ -55,7 +55,8 @@ To crop only when you want an ROI, add a KML:
 
 The importer recognizes filenames containing `int`, `ifg`, `interferogram`,
 `wrapped`, or `phase` as wrapped phase and filenames containing `coh`,
-`coherence`, `corr`, or `correlation` as coherence. If a SWEETS version uses
+`coherence`, `cor`, `corr`, or `correlation` as coherence. This includes the
+common SWEETS pair `int.tif` and `int.cor.tif`. If a SWEETS version uses
 another convention, narrow the search with `--sweets-phase-pattern` and
 `--sweets-coherence-pattern`. By default it uses `dem.tif` in the supplied
 SWEETS directory (or its parent) when present; use `--sweets-dem` to supply
