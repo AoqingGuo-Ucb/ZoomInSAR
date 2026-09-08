@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,44 @@ def venv_python(project: Path) -> Path:
     return next((path for path in candidates if path.is_file()), candidates[0])
 
 
+def sweets_dem_from_directory(sweets_dir: Path) -> Path | None:
+    """Find SWEETS' work-level DEM from an output directory or a descendant."""
+    return next(
+        (path / "dem.tif" for path in (sweets_dir, *sweets_dir.parents) if (path / "dem.tif").is_file()),
+        None,
+    )
+
+
+def saved_sweets_directory(dataset: str | None) -> Path | None:
+    """Return the SWEETS source saved by a previous GeoTIFF import, if any."""
+    if not dataset:
+        return None
+    metadata = ROOT / "Data" / "ROI" / dataset / "crop_metadata.json"
+    if not metadata.is_file():
+        return None
+    try:
+        value = json.loads(metadata.read_text(encoding="utf-8")).get("sweets_directory")
+    except (OSError, json.JSONDecodeError):
+        return None
+    return Path(value) if value else None
+
+
+def choose_path(label: str, default: Path | None, *, directory: bool) -> Path:
+    """Interactively select an existing directory or file in a terminal."""
+    expectation = "directory" if directory else "file"
+    while True:
+        prompt = f"{label} [{default}]: " if default else f"{label}: "
+        value = input(prompt).strip()
+        candidate = Path(value).expanduser() if value else default
+        if candidate is None:
+            print(f"Please enter a {expectation} path.")
+            continue
+        candidate = candidate.resolve()
+        if (candidate.is_dir() if directory else candidate.is_file()):
+            return candidate
+        print(f"Not an existing {expectation}: {candidate}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the complete InSAR crop, filter, unwrap, detrend, and time-series workflow"
@@ -42,12 +81,16 @@ def main() -> None:
     )
     parser.add_argument("--sweets-dir", help="SWEETS work/output directory containing wrapped-phase and coherence GeoTIFFs")
     parser.add_argument(
-        "--sweets-phase-pattern", default="*.tif*",
-        help="Recursive glob used to locate SWEETS wrapped-phase GeoTIFFs.",
+        "--choose-sweets-paths", action="store_true",
+        help="Interactively choose the SWEETS interferogram directory and DEM in the terminal.",
     )
     parser.add_argument(
-        "--sweets-coherence-pattern", default="*.tif*",
-        help="Recursive glob used to locate SWEETS coherence GeoTIFFs.",
+        "--sweets-phase-pattern", default="*.int.tif",
+        help="Recursive glob for SWEETS wrapped-phase GeoTIFFs (default: *.int.tif).",
+    )
+    parser.add_argument(
+        "--sweets-coherence-pattern", default="*.int.cor.tif",
+        help="Recursive glob for SWEETS pairwise coherence GeoTIFFs (default: *.int.cor.tif).",
     )
     parser.add_argument(
         "--sweets-skip-unpaired", action="store_true",
@@ -236,28 +279,30 @@ def main() -> None:
     args = parser.parse_args()
 
     crop_dataset = dataset_name(args.dataset)
+    saved_dir = saved_sweets_directory(crop_dataset)
+    selected_sweets_dir = Path(args.sweets_dir).expanduser() if args.sweets_dir else saved_dir
+    if selected_sweets_dir:
+        args.sweets_dir = str(selected_sweets_dir)
+    if args.choose_sweets_paths:
+        selected_sweets_dir = choose_path(
+            "SWEETS interferogram directory", selected_sweets_dir, directory=True,
+        )
+        args.sweets_dir = str(selected_sweets_dir)
+        detected_dem = sweets_dem_from_directory(selected_sweets_dir)
+        explicit_dem = Path(args.sweets_dem).expanduser() if args.sweets_dem else detected_dem
+        args.sweets_dem = str(choose_path("DEM GeoTIFF", explicit_dem, directory=False))
     if args.source == "sweets" and not args.sweets_dir:
-        parser.error("--sweets-dir is required when --source sweets")
+        parser.error("--sweets-dir is required when --source sweets (or use --choose-sweets-paths)")
     if args.source == "sweets" and not crop_dataset:
         parser.error("--dataset is required when --source sweets")
     compute_dataset = dataset_name(args.compute_dataset) or crop_dataset
     dataset_args = ["--dataset", compute_dataset] if compute_dataset else []
     pair_args = ["--pair", args.pair] if args.pair else []
     default_dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
-    sweets_path = Path(args.sweets_dir) if args.sweets_dir else None
-    inferred_sweets_dem = next(
-        (
-            path
-            for path in (
-                sweets_path / "dem.tif",
-                sweets_path.parent / "dem.tif",
-                sweets_path.parent.parent / "dem.tif",
-            )
-            if path.is_file()
-        ),
-        default_dem,
-    ) if sweets_path else default_dem
-    dem = Path(args.sweets_dem) if args.sweets_dem else inferred_sweets_dem
+    sweets_path = Path(args.sweets_dir).expanduser() if args.sweets_dir else saved_dir
+    inferred_sweets_dem = sweets_dem_from_directory(sweets_path) if sweets_path else None
+    inferred_sweets_dem = inferred_sweets_dem or default_dem
+    dem = Path(args.sweets_dem).expanduser() if args.sweets_dem else inferred_sweets_dem
 
     unwrap_dir = ROOT / "InSAR_Unwrapping"
     cropper_dir = ROOT / "InSAR_KML_Cropper"

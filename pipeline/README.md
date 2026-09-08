@@ -53,18 +53,31 @@ To crop only when you want an ROI, add a KML:
 .\run_insar_pipeline.cmd --source sweets --sweets-dir D:\SWEETS\Prima\work\dolphin --dataset Prima --crop-kml D:\ROI\landfill.kml
 ```
 
-The importer recognizes filenames containing `int`, `ifg`, `interferogram`,
-`wrapped`, or `phase` as wrapped phase and filenames containing `coh`,
-`coherence`, `cor`, `corr`, or `correlation` as coherence. This includes the
-common SWEETS pair `int.tif` and `int.cor.tif`. If a SWEETS version uses
-another convention, narrow the search with `--sweets-phase-pattern` and
-`--sweets-coherence-pattern`. By default it uses `dem.tif` in the supplied
+By default, the importer uses the common SWEETS pair `*.int.tif` for wrapped
+phase and `*.int.cor.tif` for pairwise coherence. If a SWEETS version uses
+another convention, override the defaults with `--sweets-phase-pattern` and
+`--sweets-coherence-pattern`. It uses `dem.tif` in the supplied
 SWEETS directory, its parent, or its work-directory parent when present; use
 `--sweets-dem` to supply another DEM.
 
-SWEETS auxiliary rasters such as `temporal_coherence_*`, `similarity_*`, and
-`shp_counts_*` are ignored automatically; they are quality layers, not
-individual wrapped interferograms or pairwise coherence inputs.
+The imported dataset saves its SWEETS source location in `crop_metadata.json`.
+Later restarts (for example, with `--skip-cropper --skip-filtering`) therefore
+automatically reuse the SWEETS work-directory `dem.tif`; you only need
+`--sweets-dem` when selecting a different DEM.
+
+If the paths vary between projects or you prefer not to type them, add
+`--choose-sweets-paths`. The pipeline prompts for an existing interferogram
+directory and DEM GeoTIFF, showing any saved/detected path as the default.
+For example:
+
+```bash
+python3 run_insar_pipeline.py --source sweets --dataset Prima --no-crop --choose-sweets-paths
+```
+
+SWEETS auxiliary rasters such as `temporal_coherence_*`, `similarity_*`,
+`shp_counts_*`, and `*.int.mask.tif` are ignored automatically; they are
+quality or mask layers, not individual wrapped interferograms or pairwise
+coherence inputs.
 
 Some SWEETS networks contain long-baseline `*.int.tif` files without an
 associated `*.int.cor.tif` coherence product. The default stops and lists these

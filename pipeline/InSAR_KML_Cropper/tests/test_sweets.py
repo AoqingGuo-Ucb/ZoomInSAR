@@ -39,6 +39,7 @@ def test_discovery_ignores_sweets_auxiliary_quality_rasters(tmp_path: Path):
     (tmp_path / "temporal_coherence_20160109_20160707.tif").touch()
     (tmp_path / "shp_counts_20160109_20160707.tif").touch()
     (tmp_path / "similarity_20160109_20160707.tif").touch()
+    (tmp_path / "20160109_20160707.int.mask.tif").touch()
 
     assert set(_discover(tmp_path, "*.tif", "phase")) == {("20200101", "20200113")}
     assert set(_discover(tmp_path, "*.tif", "coherence")) == {("20200101", "20200113")}

@@ -22,7 +22,7 @@ _COHERENCE = re.compile(
 )
 _PHASE = re.compile(r"(?:^|[_\-.])(int|ifg|interferogram|wrapped|phase)(?=[_\-.]|$)", re.IGNORECASE)
 _AUXILIARY = re.compile(
-    r"(?:^|[_\-.])(?:temporal[_\-.]?coherence|similarity|shp[_\-.]?counts)(?=[_\-.]|$)",
+    r"(?:^|[_\-.])(?:temporal[_\-.]?coherence|similarity|shp[_\-.]?counts|mask)(?=[_\-.]|$)",
     re.IGNORECASE,
 )
 
@@ -39,8 +39,8 @@ def _discover(root: Path, pattern: str, kind: str) -> dict[tuple[str, str], Path
     selected: dict[tuple[str, str], Path] = {}
     for path in candidates:
         name = path.name
-        # Dolphin/SWEETS also writes quality layers with date pairs.  They are
-        # not pairwise coherence rasters and must never enter this workflow.
+        # Dolphin/SWEETS also writes masks and quality layers with date pairs.
+        # They are not pairwise coherence rasters and must never enter this workflow.
         if _AUXILIARY.search(name):
             continue
         # SWEETS commonly writes ``<pair>.int.tif`` and
@@ -122,8 +122,8 @@ def import_sweets_dataset(
     output_root: str | Path,
     dataset_name: str,
     *,
-    phase_pattern: str = "*.tif*",
-    coherence_pattern: str = "*.tif*",
+    phase_pattern: str = "*.int.tif",
+    coherence_pattern: str = "*.int.cor.tif",
     crop_kml: str | Path | None = None,
     margin: float = 0.20,
     overwrite: bool = False,
