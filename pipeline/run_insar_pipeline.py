@@ -40,11 +40,11 @@ def sweets_dem_from_directory(sweets_dir: Path) -> Path | None:
     )
 
 
-def saved_sweets_directory(dataset: str | None) -> Path | None:
+def saved_sweets_directory(dataset: str | None, data_root: Path) -> Path | None:
     """Return the SWEETS source saved by a previous GeoTIFF import, if any."""
     if not dataset:
         return None
-    metadata = ROOT / "Data" / "ROI" / dataset / "crop_metadata.json"
+    metadata = data_root / "ROI" / dataset / "crop_metadata.json"
     if not metadata.is_file():
         return None
     try:
@@ -75,6 +75,13 @@ def main() -> None:
         description="Run the complete InSAR crop, filter, unwrap, detrend, and time-series workflow"
     )
     parser.add_argument("--dataset", help="Optional single Dataset_* directory name for the full workflow")
+    parser.add_argument(
+        "--output-root",
+        help=(
+            "Directory for imported data and all generated outputs. Defaults to the "
+            "pipeline directory; code and virtual environments remain in place."
+        ),
+    )
     parser.add_argument(
         "--source", choices=("gamma", "sweets"), default="gamma",
         help="Input format: existing GAMMA binaries (default) or SWEETS GeoTIFF products.",
@@ -278,8 +285,10 @@ def main() -> None:
     parser.add_argument("--skip-timeseries", action="store_true")
     args = parser.parse_args()
 
+    output_root = Path(args.output_root).expanduser().resolve() if args.output_root else ROOT
+    data_root = output_root / "Data"
     crop_dataset = dataset_name(args.dataset)
-    saved_dir = saved_sweets_directory(crop_dataset)
+    saved_dir = saved_sweets_directory(crop_dataset, data_root)
     selected_sweets_dir = Path(args.sweets_dir).expanduser() if args.sweets_dir else saved_dir
     if selected_sweets_dir:
         args.sweets_dir = str(selected_sweets_dir)
@@ -298,7 +307,9 @@ def main() -> None:
     compute_dataset = dataset_name(args.compute_dataset) or crop_dataset
     dataset_args = ["--dataset", compute_dataset] if compute_dataset else []
     pair_args = ["--pair", args.pair] if args.pair else []
-    default_dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
+    output_dem = data_root / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
+    bundled_dem = ROOT / "Data" / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
+    default_dem = output_dem if output_dem.is_file() else bundled_dem
     sweets_path = Path(args.sweets_dir).expanduser() if args.sweets_dir else saved_dir
     inferred_sweets_dem = sweets_dem_from_directory(sweets_path) if sweets_path else None
     inferred_sweets_dem = inferred_sweets_dem or default_dem
@@ -309,6 +320,10 @@ def main() -> None:
     filtering_dir = ROOT / "InSAR_Filtering"
     detrend_dir = ROOT / "InSAR_Detrending"
     timeseries_dir = ROOT / "InSAR_Timeseries"
+    filtering_output = output_root / "InSAR_Filtering" / "OUTPUT"
+    unwrapping_output = output_root / "InSAR_Unwrapping" / "OUTPUT"
+    detrending_output = output_root / "InSAR_Detrending" / "OUTPUT"
+    timeseries_output = output_root / "InSAR_Timeseries" / "OUTPUT"
 
     if args.source == "sweets":
         run(
@@ -316,7 +331,7 @@ def main() -> None:
             venv_python(cropper_dir),
             "insar_kml_cropper", cropper_dir,
             [
-                "--data-dir", str(ROOT / "Data"),
+                "--data-dir", str(data_root),
                 "--sweets-dir", str(args.sweets_dir),
                 "--dataset", crop_dataset,
                 "--phase-pattern", args.sweets_phase_pattern,
@@ -330,14 +345,14 @@ def main() -> None:
         )
     elif not args.skip_cropper:
         crop_arguments = [
-            "--data-dir", str(ROOT / "Data"),
+            "--data-dir", str(data_root),
             "--margin", str(args.margin),
             "--overwrite",
             *pair_args,
         ]
         if crop_dataset:
             roi_name = crop_dataset.removeprefix("Dataset_")
-            crop_arguments.extend(["--kml", str(ROOT / "Data" / "ROI" / f"{roi_name}.kml")])
+            crop_arguments.extend(["--kml", str(data_root / "ROI" / f"{roi_name}.kml")])
         run(
             "1/5  InSAR KML Cropper",
             venv_python(cropper_dir),
@@ -350,8 +365,8 @@ def main() -> None:
             venv_python(filtering_dir),
             "insar_filtering", filtering_dir,
             [
-                "--roi-dir", str(ROOT / "Data" / "ROI"),
-                "--output-dir", str(filtering_dir / "OUTPUT"),
+                "--roi-dir", str(data_root / "ROI"),
+                "--output-dir", str(filtering_output),
                 *dataset_args,
                 *pair_args,
             ],
@@ -359,9 +374,9 @@ def main() -> None:
 
     if not args.skip_unwrapping:
         unwrap_input = (
-            ROOT / "InSAR_Filtering" / "OUTPUT"
+            filtering_output
             if args.input_source == "filtered"
-            else ROOT / "Data" / "ROI"
+            else data_root / "ROI"
         )
         input_option = "--filtered-root" if args.input_source == "filtered" else "--roi-dir"
         run(
@@ -371,7 +386,7 @@ def main() -> None:
             [
                 "--input-source", args.input_source,
                 input_option, str(unwrap_input),
-                "--output-dir", str(unwrap_dir / "OUTPUT"),
+                "--output-dir", str(unwrapping_output),
                 "--dem", str(dem),
                 *dataset_args,
                 *pair_args,
@@ -381,15 +396,15 @@ def main() -> None:
     if not args.skip_detrending:
         exclude_masks: dict[str, Path] = {}
         if args.auto_exclude_from_velocity:
-            preliminary_output = timeseries_dir / "OUTPUT_preliminary_unwrapped"
-            auto_mask_output = detrend_dir / "OUTPUT_auto_masks"
+            preliminary_output = output_root / "InSAR_Timeseries" / "OUTPUT_preliminary_unwrapped"
+            auto_mask_output = output_root / "InSAR_Detrending" / "OUTPUT_auto_masks"
             run(
                 "3.5/5  Preliminary Time Series for Auto Exclude Mask",
                 venv_python(timeseries_dir),
                 "insar_timeseries", timeseries_dir,
                 [
                     "--input-source", "unwrapping",
-                    "--unwrapping-root", str(unwrap_dir / "OUTPUT"),
+                    "--unwrapping-root", str(unwrapping_output),
                     "--output-dir", str(preliminary_output),
                     "--max-baseline-days", str(args.max_baseline_days),
                     *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
@@ -408,7 +423,7 @@ def main() -> None:
                     "insar_detrending.auto_mask_cli", detrend_dir,
                     [
                         "--timeseries-root", str(preliminary_output),
-                        "--filtering-root", str(filtering_dir / "OUTPUT"),
+                        "--filtering-root", str(filtering_output),
                         "--output-dir", str(auto_mask_output),
                         "--dataset", mask_dataset,
                         "--velocity-percentile", str(args.auto_exclude_velocity_percentile),
@@ -433,10 +448,10 @@ def main() -> None:
                 venv_python(detrend_dir),
                 "insar_detrending", detrend_dir,
                 [
-                "--unwrapping-root", str(unwrap_dir / "OUTPUT"),
-                "--geo-root", str(ROOT / "InSAR_Filtering" / "OUTPUT"),
+                "--unwrapping-root", str(unwrapping_output),
+                "--geo-root", str(filtering_output),
                 "--dem", str(dem),
-                "--output-dir", str(detrend_dir / "OUTPUT"),
+                "--output-dir", str(detrending_output),
                 "--degree", str(args.detrend_degree),
                 "--orbit-model", args.orbit_model,
                 "--stable-dispersion-percentile", str(args.stable_dispersion_percentile),
@@ -472,8 +487,8 @@ def main() -> None:
             "insar_timeseries", timeseries_dir,
             [
                 "--input-source", "detrending",
-                "--detrending-root", str(detrend_dir / "OUTPUT"),
-                "--output-dir", str(timeseries_dir / "OUTPUT"),
+                "--detrending-root", str(detrending_output),
+                "--output-dir", str(timeseries_output),
                 "--max-baseline-days", str(args.max_baseline_days),
                 *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                 *dataset_args,

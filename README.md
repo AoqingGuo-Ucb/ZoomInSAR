@@ -63,6 +63,11 @@ python3 run_insar_pipeline.py \
   --crop-kml /path/to/landfill.kml
 ```
 
+To keep all generated data outside the repository, add
+`--output-root /path/to/your-results-folder`. The selected folder receives the
+converted inputs and every filtering, unwrapping, detrending, and time-series
+output.
+
 See [`pipeline/README.md`](pipeline/README.md) for filename matching rules,
 DEM selection, and all SWEETS options.
 
@@ -75,4 +80,3 @@ needed:
   --no-auto-exclude-from-velocity `
   --no-allow-low-quality-bridges
 ```
-

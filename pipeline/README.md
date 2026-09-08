@@ -27,6 +27,19 @@ in red on time-series figures.
 
 Use `python run_insar_pipeline.py --help` for all parameters.
 
+## Choose an output folder
+
+By default, generated files are written under this `pipeline` directory. Use
+`--output-root` to place all converted inputs and processing results elsewhere:
+
+```bash
+python3 run_insar_pipeline.py --output-root /path/to/Chiquita_ZoomInSAR_Results ...
+```
+
+That folder will contain `Data`, `InSAR_Filtering`, `InSAR_Unwrapping`,
+`InSAR_Detrending`, and `InSAR_Timeseries`. Use the same `--output-root` when
+restarting a run so every stage uses the same saved inputs and outputs.
+
 ## Run from SWEETS GeoTIFF outputs
 
 SWEETS products can be passed directly to the same post-processing chain. The
