@@ -65,8 +65,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--asf-reference-granule",
                          help=("Optional ASF granule used to force its orbit/direction. Usually omit this; "
                                "automatic mode otherwise selects the best-covered compatible DISP track."))
-    command.add_argument("--asf-max-products", type=int, default=600,
-                         help="Safety limit for automatic overlap search results (default: 600).")
+    command.add_argument("--asf-max-products", type=int, default=5000,
+                         help=("Safety limit for ASF catalogue search results before track filtering "
+                               "(default: 5000; products are filtered before download)."))
     command.add_argument("--project-root", type=Path,
                          help=("One-folder shortcut: project folder containing work/ and ZoomInSAR_Results/. "
                                "It fills the DEM, result, download, and output paths."))
@@ -283,6 +284,12 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
     else:
         selected = []
         selection_method = "none"
+    # ASF may return multiple processing versions/bursts for one date. Keep one
+    # product per acquisition date so the same epoch is never over-weighted.
+    one_per_date = {}
+    for product in sorted(selected, key=product_date):
+        one_per_date.setdefault(product_date(product).date(), product)
+    selected = list(one_per_date.values())
     if len(selected) < 2:
         raise ValueError(
             "ASF found fewer than two matching OPERA DISP NetCDF products in the overlap. "
