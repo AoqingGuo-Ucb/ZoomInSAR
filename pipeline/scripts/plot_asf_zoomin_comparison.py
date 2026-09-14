@@ -20,6 +20,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -116,6 +117,54 @@ def require_file(path: Path, label: str) -> None:
         raise FileNotFoundError(f"{label} does not exist or is not a file: {path}")
 
 
+def readable_netcdf(path: Path) -> bool:
+    """Check enough of a NetCDF to reject an interrupted/partial download."""
+    if not path.is_file() or not path.stat().st_size:
+        return False
+    try:
+        with rasterio.open(path) as dataset:
+            layers = dataset.subdatasets
+            if layers:
+                with rasterio.open(layers[0]) as layer:
+                    layer.read(1, window=((layer.height - 1, layer.height),
+                                          (layer.width - 1, layer.width)))
+            elif dataset.count:
+                dataset.read(1, window=((dataset.height - 1, dataset.height),
+                                        (dataset.width - 1, dataset.width)))
+            else:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def download_product_with_retries(product, destination: Path, filename: str, session,
+                                  attempts: int = 3) -> Path:
+    """Download one ASF NetCDF, retrying network interruptions safely."""
+    target = destination / filename
+    if readable_netcdf(target):
+        return target
+    # This target is an ASF product file in the selected download directory.
+    # A non-readable file here can only be an incomplete earlier download.
+    target.unlink(missing_ok=True)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            product.download(path=str(destination), session=session)
+            if readable_netcdf(target):
+                return target
+            raise IOError(f"ASF saved an incomplete NetCDF: {target.name}")
+        except Exception as error:
+            last_error = error
+            target.unlink(missing_ok=True)
+            if attempt < attempts:
+                time.sleep(5 * attempt)
+    raise RuntimeError(
+        f"ASF could not download {filename} after {attempts} attempts. "
+        f"Please rerun the same command; completed files will be reused. Last error: {last_error}"
+    )
+
+
 def apply_project_defaults(args: argparse.Namespace) -> None:
     """Fill conventional ZoomInSAR paths from one project folder when requested."""
     if not args.project_root:
@@ -148,24 +197,14 @@ def download_asf_granule(granule: str, destination: Path) -> Path:
     asf_search, session = asf_session()
     destination.mkdir(parents=True, exist_ok=True)
     existing = destination / Path(granule).name
-    if existing.is_file() and existing.stat().st_size:
+    if readable_netcdf(existing):
         print(f"Using existing ASF download: {existing}")
         return existing
     results = asf_search.granule_search([granule])
     if not results:
         raise ValueError(f"ASF did not find a granule named {granule!r}.")
     # With no token, asf_search/requests uses the recipient's ~/.netrc credentials.
-    results.download(path=str(destination), session=session)
-    candidates = sorted(destination.glob(f"*{Path(granule).stem}*"))
-    netcdfs = [path for path in candidates if path.is_file() and path.suffix.lower() == ".nc"]
-    if len(netcdfs) == 1:
-        return netcdfs[0]
-    if existing.is_file():
-        return existing
-    raise FileNotFoundError(
-        f"ASF download completed but the expected NetCDF was not found in {destination}. "
-        f"Found: {[path.name for path in candidates]}"
-    )
+    return download_product_with_retries(results[0], destination, existing.name, session)
 
 
 def asf_session():
@@ -300,15 +339,7 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
     records: list[tuple[Path, datetime]] = []
     for product in sorted(selected, key=product_date):
         name = Path(product_filename(product)).name
-        target_file = destination / name
-        if not target_file.is_file() or not target_file.stat().st_size:
-            product.download(path=str(destination), session=session)
-        if not target_file.is_file():
-            # ASF occasionally normalizes the local filename; find the newest matching NetCDF.
-            candidates = sorted(destination.glob("*.nc"), key=lambda path: path.stat().st_mtime)
-            if not candidates:
-                raise FileNotFoundError(f"ASF did not create a NetCDF in {destination} for {name}.")
-            target_file = candidates[-1]
+        target_file = download_product_with_retries(product, destination, name, session)
         records.append((target_file, product_date(product)))
     manifest = {
         "reference_granule": reference_granule,

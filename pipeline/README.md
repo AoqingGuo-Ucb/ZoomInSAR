@@ -162,6 +162,10 @@ With `--project-root`, the script automatically uses `work/dem.tif`,
 If you already know the correct ASF track, optionally add
 `--asf-reference-granule GRANULE_NAME`; otherwise do not use this option.
 
+If an ASF connection drops during a large NetCDF download, rerun the same
+command. The script reuses readable completed files, removes only the incomplete
+ASF file, and retries each failed download three times automatically.
+
 To create map panels (a) and (b) from only one named ASF product, use the
 single-granule mode below. A single `*.unw.nc` is **not** a multi-year velocity
 or time-series comparison:
