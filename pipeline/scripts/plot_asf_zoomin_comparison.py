@@ -62,9 +62,9 @@ def parser() -> argparse.ArgumentParser:
                               "ZoomInSAR/ASF overlapping period, then derive ASF velocity from that stack."))
     command.add_argument("--asf-download-dir", type=Path,
                          help="Directory for downloaded ASF files (inferred from --project-root when omitted).")
-    command.add_argument("--asf-reference-granule", default="20221107_20221213.unw.nc",
-                         help=("ASF granule used to identify the correct orbit/direction for "
-                               "--auto-asf-overlap (default: 20221107_20221213.unw.nc)."))
+    command.add_argument("--asf-reference-granule",
+                         help=("Optional ASF granule used to force its orbit/direction. Usually omit this; "
+                               "automatic mode otherwise selects the best-covered compatible DISP track."))
     command.add_argument("--asf-max-products", type=int, default=600,
                          help="Safety limit for automatic overlap search results (default: 600).")
     command.add_argument("--project-root", type=Path,
@@ -234,27 +234,26 @@ def derive_asf_velocity(displacements: np.ndarray, dates: list[datetime]) -> np.
     return velocity
 
 
-def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, reference_granule: str,
+def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, reference_granule: str | None,
                          destination: Path, max_products: int) -> list[tuple[Path, datetime]]:
     """Download compatible OPERA DISP rasters for the ZoomInSAR/ASF time overlap.
 
-    The reference granule determines orbit and look direction, avoiding an
-    invalid mixture of ascending and descending LOS observations.
+    Products are grouped by orbit/direction so ascending and descending LOS
+    observations are never mixed. The best-covered group is selected by default;
+    an optional reference granule can force a known matching group.
     """
     if max_products < 2:
         raise ValueError("--asf-max-products must be at least 2.")
     asf_search, session = asf_session()
-    reference = asf_search.granule_search([reference_granule])
-    if not reference:
-        raise ValueError(f"ASF did not find reference granule {reference_granule!r}.")
-    reference_product = reference[0]
-    orbit = product_property(reference_product, "relativeOrbit", "pathNumber")
-    direction = product_property(reference_product, "flightDirection")
-    if not orbit or not direction:
-        raise ValueError(
-            "ASF reference metadata did not include orbit/direction. Use an ASF granule from the "
-            "same track as ZoomInSAR, or download the matching DISP stack manually."
-        )
+    reference_orbit = reference_direction = None
+    if reference_granule:
+        reference = asf_search.granule_search([reference_granule])
+        if not reference:
+            raise ValueError(f"ASF did not find reference granule {reference_granule!r}.")
+        reference_orbit = product_property(reference[0], "relativeOrbit", "pathNumber")
+        reference_direction = product_property(reference[0], "flightDirection")
+        if not reference_orbit or not reference_direction:
+            raise ValueError(f"ASF reference granule {reference_granule!r} has no orbit/direction metadata.")
     start, end = min(zoom_dates), max(zoom_dates)
     results = asf_search.search(
         dataset=asf_search.DATASET.OPERA_S1,
@@ -263,23 +262,33 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
         end=end.strftime("%Y-%m-%dT23:59:59Z"),
         maxResults=max_products + 1,
     )
-    selected = []
+    groups: dict[tuple[str, str], list] = {}
     for product in results:
         name = product_filename(product).lower()
         product_orbit = product_property(product, "relativeOrbit", "pathNumber")
         product_direction = product_property(product, "flightDirection")
-        if ("disp" in name and name.endswith(".nc") and product_orbit == orbit
-                and product_direction and product_direction.lower() == direction.lower()):
-            selected.append(product)
+        if "disp" in name and name.endswith(".nc") and product_orbit and product_direction:
+            key = (product_orbit, product_direction.lower())
+            groups.setdefault(key, []).append(product)
     if len(results) > max_products:
         raise ValueError(
             f"ASF search exceeded --asf-max-products={max_products}; narrow the map region or raise the limit."
         )
+    if reference_orbit:
+        selected = groups.get((reference_orbit, reference_direction.lower()), [])
+        selection_method = f"reference granule {reference_granule}"
+    elif groups:
+        track, selected = max(groups.items(), key=lambda item: (len(item[1]), item[0]))
+        selection_method = f"largest compatible group ({track[0]}, {track[1]})"
+    else:
+        selected = []
+        selection_method = "none"
     if len(selected) < 2:
         raise ValueError(
             "ASF found fewer than two matching OPERA DISP NetCDF products in the overlap. "
             "A velocity/time-series comparison cannot be made for this interval."
         )
+    orbit, direction = product_property(selected[0], "relativeOrbit", "pathNumber"), product_property(selected[0], "flightDirection")
     destination.mkdir(parents=True, exist_ok=True)
     records: list[tuple[Path, datetime]] = []
     for product in sorted(selected, key=product_date):
@@ -296,6 +305,7 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
         records.append((target_file, product_date(product)))
     manifest = {
         "reference_granule": reference_granule,
+        "track_selection": selection_method,
         "relative_orbit": orbit,
         "flight_direction": direction,
         "zoominsar_dates": [date.strftime("%Y-%m-%d") for date in zoom_dates],

@@ -144,10 +144,10 @@ your Earthdata account does not appear in the plotting command.
 
 For a scientifically comparable velocity, use the automatic-overlap mode. It
 reads ZoomInSAR's `dates.json`, searches the OPERA DISP catalogue over the map
-footprint and date overlap, keeps the orbit/direction of the supplied reference
-granule, downloads the compatible displacement stack, and fits an ASF velocity
-over exactly that overlap. It saves `asf_overlap_manifest.json` beside the
-downloads for traceability.
+footprint and date overlap, automatically selects the compatible orbit/direction
+group with the best date coverage, downloads that displacement stack, and fits
+an ASF velocity over exactly that overlap. It saves
+`asf_overlap_manifest.json` beside the downloads for traceability.
 
 ```bash
 python3 scripts/plot_asf_zoomin_comparison.py \
@@ -159,6 +159,8 @@ With `--project-root`, the script automatically uses `work/dem.tif`,
 `ZoomInSAR_Results/InSAR_Timeseries/OUTPUT/Dataset_<dataset>`, and
 `ZoomInSAR_Results/Data/ROI/Dataset_<dataset>`. It also puts downloads in
 `ASF_overlap_downloads` by default, so no repeated long folder paths are needed.
+If you already know the correct ASF track, optionally add
+`--asf-reference-granule GRANULE_NAME`; otherwise do not use this option.
 
 To create map panels (a) and (b) from only one named ASF product, use the
 single-granule mode below. A single `*.unw.nc` is **not** a multi-year velocity
