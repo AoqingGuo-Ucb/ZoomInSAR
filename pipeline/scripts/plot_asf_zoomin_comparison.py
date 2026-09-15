@@ -545,16 +545,68 @@ def asf_series_at_point(stack: np.ndarray, target: GridReference,
 
 
 def select_common_representative_point(args: argparse.Namespace, asf_stack: np.ndarray,
-                                       target: GridReference) -> tuple[tuple[float, float], np.ndarray]:
-    """Choose a ZoomInSAR representative point that also has an ASF time series."""
+                                       target: GridReference) -> tuple[tuple[float, float] | None, np.ndarray]:
+    """Choose a ZoomInSAR representative point that also has an ASF time series.
+
+    Failure to find a common ASF point is non-fatal: the caller can still plot
+    the ZoomInSAR-only time series.
+    """
     for point in representative_point_candidates(args):
         series = asf_series_at_point(asf_stack, target, point)
         if series is not None:
             return point, series
-    raise ValueError(
-        "None of the ZoomInSAR representative points has at least two valid ASF observations. "
-        "Choose another --point-lon/--point-lat or inspect the ASF quality mask."
+    print(
+        "WARNING: No ZoomInSAR representative point has at least two valid ASF observations; "
+        "continuing with ZoomInSAR-only time series."
     )
+    return None, np.asarray([], dtype=float)
+
+
+def pixel_center(target: GridReference, row: int, col: int) -> tuple[float, float]:
+    """Return longitude/latitude of a target-grid pixel center."""
+    x, y = rasterio.transform.xy(target.transform, row, col, offset="center")
+    return float(x), float(y)
+
+
+def choose_zoom_deformation_and_stable_points(
+    args: argparse.Namespace, target: GridReference
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Choose one deforming and one stable point from the ZoomInSAR velocity map.
+
+    The deforming point is chosen near the 95th percentile of absolute LOS
+    velocity rather than at the single most extreme pixel, which makes the
+    selection less sensitive to isolated outliers.  The stable point is the
+    valid pixel with absolute velocity closest to zero.  An explicitly supplied
+    --point-lon/--point-lat is used as the deforming point.
+    """
+    values = np.asarray(target.data, dtype=float)
+    valid = np.isfinite(values)
+    if np.count_nonzero(valid) < 2:
+        raise ValueError("ZoomInSAR velocity map has fewer than two valid pixels.")
+
+    if args.point_lon is not None and args.point_lat is not None:
+        deforming = (float(args.point_lon), float(args.point_lat))
+    else:
+        abs_values = np.abs(values)
+        threshold = float(np.nanpercentile(abs_values[valid], 95.0))
+        candidates = np.where(valid & (abs_values >= threshold), abs_values, np.nan)
+        row, col = np.unravel_index(np.nanargmin(np.abs(candidates - threshold)), values.shape)
+        deforming = pixel_center(target, int(row), int(col))
+
+    stable_metric = np.where(valid, np.abs(values), np.nan)
+    stable_row, stable_col = np.unravel_index(np.nanargmin(stable_metric), values.shape)
+    stable = pixel_center(target, int(stable_row), int(stable_col))
+
+    # Avoid selecting effectively the same location for both roles.
+    drow, dcol = rasterio.transform.rowcol(target.transform, *deforming)
+    if int(drow) == int(stable_row) and int(dcol) == int(stable_col):
+        flat = np.argsort(np.where(valid, np.abs(values), np.inf), axis=None)
+        for index in flat:
+            row, col = np.unravel_index(index, values.shape)
+            if (int(row), int(col)) != (int(drow), int(dcol)):
+                stable = pixel_center(target, int(row), int(col))
+                break
+    return deforming, stable
 
 
 def load_shape(data_dir: Path) -> tuple[int, int]:
@@ -696,31 +748,42 @@ def load_auto_asf_stack(records: list[tuple[Path, datetime]], target: GridRefere
 
 
 def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, region: tuple[float, ...],
-             projection: str, cpt: str, title: str, point: tuple[float, float] | None,
+             projection: str, cpt: str, title: str, points: list[tuple[float, float, str]] | None,
              transparency: float, scale_km: float) -> None:
     shade = pygmt.grdgradient(grid=dem, azimuth=315, normalize="t1")
     fig.grdimage(grid=dem, region=region, projection=projection, cmap="gray", shading=shade,
                  frame=["af", f"+t{title}"])
     fig.grdimage(grid=velocity, cmap=cpt, transparency=transparency)
-    if point:
-        fig.plot(x=point[0], y=point[1], style="a0.30c", fill="yellow", pen="0.75p,black")
+    if points:
+        for longitude, latitude, role in points:
+            if role == "Deformation":
+                fig.plot(x=longitude, y=latitude, style="a0.30c", fill="yellow", pen="0.75p,black")
+            else:
+                fig.plot(x=longitude, y=latitude, style="c0.25c", fill="white", pen="0.75p,black")
     fig.basemap(map_scale=f"jBL+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
 
 
-def plot_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime], zoom_values: np.ndarray,
-                    asf_dates: list[datetime], asf_values: np.ndarray) -> None:
-    all_dates = zoom_dates + asf_dates
-    all_values = np.concatenate([zoom_values, asf_values])
+def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
+                         deformation_values: np.ndarray, stable_values: np.ndarray) -> None:
+    """Plot ZoomInSAR displacement at deforming and stable reference locations."""
+    all_values = np.concatenate([deformation_values, stable_values])
     finite = all_values[np.isfinite(all_values)]
+    if not len(finite):
+        raise ValueError("Both selected ZoomInSAR time series contain only NaN values.")
     span = max(0.01, float(np.nanmax(finite) - np.nanmin(finite)))
-    ymin, ymax = float(np.nanmin(finite) - span * 0.15), float(np.nanmax(finite) + span * 0.15)
-    region = [min(all_dates).strftime("%Y-%m-%d"), max(all_dates).strftime("%Y-%m-%d"), ymin, ymax]
-    fig.basemap(region=region, projection="X25c/7c",
-                frame=["pxa1Yf3o", "ya+lRelative LOS displacement (m)", "+t(c) Common representative-point time series"])
-    fig.plot(x=zoom_dates, y=zoom_values, pen="1.3p,black", style="c0.10c", fill="black", label="ZoomInSAR")
-    fig.plot(x=asf_dates, y=asf_values, pen="1.3p,180/25/25", style="t0.16c", fill="180/25/25", label="ASF/OPERA")
+    ymin = float(np.nanmin(finite) - span * 0.15)
+    ymax = float(np.nanmax(finite) + span * 0.15)
+    region = [min(zoom_dates).strftime("%Y-%m-%d"), max(zoom_dates).strftime("%Y-%m-%d"), ymin, ymax]
+    fig.basemap(
+        region=region, projection="X25c/7c",
+        frame=["pxa1Yf3o", "ya+lRelative LOS displacement (m)",
+               "+t(c) ZoomInSAR deformation and stable-point time series"],
+    )
+    fig.plot(x=zoom_dates, y=deformation_values, pen="1.3p,180/25/25",
+             style="c0.11c", fill="180/25/25", label="Deformation zone")
+    fig.plot(x=zoom_dates, y=stable_values, pen="1.3p,black",
+             style="c0.10c", fill="white", label="No-deformation zone")
     fig.legend(position="jTR+o0.2c", box="+gwhite+p0.25p")
-
 
 def main() -> None:
     args = parser().parse_args()
@@ -745,10 +808,10 @@ def main() -> None:
     if args.auto_asf_overlap and not args.no_timeseries and not args.zoom_data_dir:
         raise ValueError("Panel (c) with --auto-asf-overlap needs --zoom-data-dir.")
     if (not args.auto_asf_overlap and not args.no_timeseries
-            and (not args.zoom_timeseries_dir or not args.zoom_data_dir or not args.asf_timeseries_nc)):
+            and (not args.zoom_timeseries_dir or not args.zoom_data_dir)):
         raise ValueError(
-            "Panel (c) requires --zoom-timeseries-dir, --zoom-data-dir, and at least one "
-            "--asf-timeseries-nc file. Use --no-timeseries for a two-map comparison."
+            "Panel (c) requires --zoom-timeseries-dir and --zoom-data-dir. "
+            "ASF time-series files are optional."
         )
 
     zoom = read_zoom_grid(args.zoom_velocity)
@@ -756,10 +819,12 @@ def main() -> None:
     dem_name = str(args.dem)
     dem = to_dataarray(reproject_to_zoom(dem_name, zoom), zoom, "dem")
     zoom_velocity = to_dataarray(zoom.data, zoom, "zoomin_velocity_mm_year")
-    point = None
+    deformation_point = None
+    stable_point = None
 
     zoom_dates: list[datetime] = []
-    zoom_series = np.asarray([])
+    zoom_deformation_series = np.asarray([])
+    zoom_stable_series = np.asarray([])
     asf_dates: list[datetime] = []
     asf_series = np.asarray([])
     if args.zoom_timeseries_dir:
@@ -784,22 +849,42 @@ def main() -> None:
             zoom, "zoomin_velocity_overlap_mm_year"
         )
         if not args.no_timeseries:
-            point, asf_series = select_common_representative_point(args, asf_stack, zoom)
-            zoom_dates, zoom_series = load_zoom_timeseries(
-                args.zoom_timeseries_dir, args.zoom_data_dir, *point
+            # ASF point availability is optional.  We still check it for diagnostics,
+            # but ZoomInSAR panel (c) no longer depends on finding a common ASF point.
+            _, asf_series = select_common_representative_point(args, asf_stack, zoom)
+            deformation_point, stable_point = choose_zoom_deformation_and_stable_points(args, zoom)
+            zoom_dates, zoom_deformation_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *deformation_point
             )
+            stable_dates, zoom_stable_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *stable_point
+            )
+            if stable_dates != zoom_dates:
+                raise ValueError("ZoomInSAR time-series dates differ between selected points.")
     else:
         asf_velocity_layer = choose_subdataset(args.asf_nc, args.asf_velocity_subdataset, "velocity")
         asf_velocity = to_dataarray(reproject_to_zoom(asf_velocity_layer, zoom) * args.asf_velocity_scale,
                                     zoom, "asf_velocity_mm_year")
         if not args.no_timeseries:
-            point = choose_point(args)
-            zoom_dates, zoom_series = load_zoom_timeseries(
-                args.zoom_timeseries_dir, args.zoom_data_dir, *point
+            deformation_point, stable_point = choose_zoom_deformation_and_stable_points(args, zoom)
+            zoom_dates, zoom_deformation_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *deformation_point
             )
-            asf_dates, asf_series = sample_asf_displacement(
-                args.asf_timeseries_nc, zoom, *point, args.asf_displacement_subdataset
+            stable_dates, zoom_stable_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *stable_point
             )
+            if stable_dates != zoom_dates:
+                raise ValueError("ZoomInSAR time-series dates differ between selected points.")
+            # Keep optional ASF sampling for compatibility/diagnostics, but never require it
+            # for the ZoomInSAR time-series figure.
+            if args.asf_timeseries_nc:
+                try:
+                    asf_dates, asf_series = sample_asf_displacement(
+                        args.asf_timeseries_nc, zoom, *deformation_point,
+                        args.asf_displacement_subdataset
+                    )
+                except ValueError as error:
+                    print(f"WARNING: ASF point time series unavailable ({error}); continuing with ZoomInSAR only.")
 
     with tempfile.TemporaryDirectory(prefix="zoomin_asf_") as temporary:
         cpt = Path(temporary) / "velocity.cpt"
@@ -814,28 +899,36 @@ def main() -> None:
         ):
             projection = "M13c"
             asf_figure = pygmt.Figure()
+            map_points = None
+            if deformation_point and stable_point:
+                map_points = [(*deformation_point, "Deformation"), (*stable_point, "Stable")]
             plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
-                     "(a) ASF/OPERA LOS velocity", point, args.transparency, scale_km)
+                     "(a) ASF/OPERA LOS velocity", map_points, args.transparency, scale_km)
             asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
                                 frame=["xaf+lLOS velocity (mm/year)"])
             asf_figure.savefig(asf_map_output, dpi=300)
 
             zoom_figure = pygmt.Figure()
             plot_map(zoom_figure, dem, zoom_velocity, zoom.region, projection, str(cpt),
-                     "(b) ZoomInSAR LOS velocity", point, args.transparency, scale_km)
+                     "(b) ZoomInSAR LOS velocity", map_points, args.transparency, scale_km)
             zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
                                  frame=["xaf+lLOS velocity (mm/year)"])
             zoom_figure.savefig(zoom_map_output, dpi=300)
-            if point:
+            if deformation_point and stable_point:
                 timeseries_output = args.output.with_name(
                     f"{args.output.stem}_timeseries{args.output.suffix}"
                 )
                 timeseries_figure = pygmt.Figure()
-                plot_timeseries(timeseries_figure, zoom_dates, zoom_series, asf_dates, asf_series)
+                plot_zoom_timeseries(
+                    timeseries_figure, zoom_dates,
+                    zoom_deformation_series, zoom_stable_series
+                )
                 timeseries_figure.savefig(timeseries_output, dpi=300)
     print(f"Wrote {asf_map_output}")
     print(f"Wrote {zoom_map_output}")
-    if point:
+    if deformation_point and stable_point:
+        print(f"ZoomInSAR deformation point: lon={deformation_point[0]:.6f}, lat={deformation_point[1]:.6f}")
+        print(f"ZoomInSAR stable point:      lon={stable_point[0]:.6f}, lat={stable_point[1]:.6f}")
         print(f"Wrote {timeseries_output}")
 
 
