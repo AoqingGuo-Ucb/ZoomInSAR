@@ -1012,14 +1012,16 @@ def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, regio
     if points:
         for longitude, latitude, role in points:
             if role == "Anomalous":
+                # Open red circle, matching the anomalous-change series in panel (c).
                 fig.plot(
-                    x=longitude, y=latitude, style="a0.30c", fill="yellow",
-                    pen="0.75p,black", label="Anomalous-change point",
+                    x=longitude, y=latitude, style="c0.32c", fill="white",
+                    pen="1.4p,red", label="Anomalous-change point",
                 )
             else:
+                # Open blue triangle, matching the normal-subsidence series in panel (c).
                 fig.plot(
-                    x=longitude, y=latitude, style="c0.25c", fill="white",
-                    pen="0.75p,black", label="Normal subsidence point",
+                    x=longitude, y=latitude, style="t0.34c", fill="white",
+                    pen="1.4p,blue", label="Normal subsidence point",
                 )
         fig.legend(position="jBL+o0.18c", box="+gwhite@80+p0.25p")
     # Put the scale bar in the upper-left blank map area, away from the colorbar.
@@ -1050,10 +1052,11 @@ def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
     if asf_dates and asf_values is not None:
         fig.plot(x=asf_dates, y=asf_values, pen="1.3p,black",
                  style="c0.10c", fill="black", label="ASF/OPERA")
-    fig.plot(x=zoom_dates, y=deformation_values, pen="1.3p,180/25/25",
-             style="c0.11c", fill="180/25/25", label="Anomalous-change point")
-    fig.plot(x=zoom_dates, y=stable_values, pen="0.9p,90/90/90",
-             style="c0.09c", fill="white", label="Normal subsidence point")
+    # Keep marker identity consistent with panel (b): open red circle / open blue triangle.
+    fig.plot(x=zoom_dates, y=deformation_values, pen="1.2p,red",
+             style="c0.13c", fill="white", label="Anomalous-change point")
+    fig.plot(x=zoom_dates, y=stable_values, pen="1.2p,blue",
+             style="t0.15c", fill="white", label="Normal subsidence point")
     fig.legend(position="jTR+o0.2c", box="+gwhite+p0.25p")
 
 def main() -> None:
@@ -1187,9 +1190,8 @@ def main() -> None:
             asf_map_points = None
             plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
                      "(a) ASF/OPERA LOS velocity", asf_map_points, args.transparency, scale_km)
-            # Place the colorbar fully below the map frame in dedicated blank space.
-            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-3.0c+h", cmap=str(cpt),
-                                frame=["xaf+lLOS velocity (mm/year)"])
+            # Keep panel (a) completely free of a colorbar; the shared colorbar is
+            # written as a separate figure below, so it can never overlap the basemap.
             asf_figure.savefig(asf_map_output, dpi=300)
 
             zoom_figure = pygmt.Figure()
@@ -1199,10 +1201,21 @@ def main() -> None:
                 zoom_map_points = [(*deformation_point, "Anomalous"), (*stable_point, "Normal")]
             plot_map(zoom_figure, dem, zoom_velocity, zoom.region, projection, str(cpt),
                      "(b) ZoomInSAR LOS velocity", zoom_map_points, args.transparency, scale_km)
-            # Place the colorbar fully below the map frame in dedicated blank space.
-            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-3.0c+h", cmap=str(cpt),
-                                 frame=["xaf+lLOS velocity (mm/year)"])
+            # Keep panel (b) completely free of a colorbar as well.
             zoom_figure.savefig(zoom_map_output, dpi=300)
+
+            # Draw one shared LOS-velocity colorbar in its own figure. This guarantees
+            # that the colorbar is outside both map images/basemaps.
+            colorbar_output = args.output.with_name(
+                f"{args.output.stem}_velocity_colorbar{args.output.suffix}"
+            )
+            colorbar_figure = pygmt.Figure()
+            colorbar_figure.basemap(region=[0, 1, 0, 1], projection="X13c/1.8c", frame="n")
+            colorbar_figure.colorbar(
+                position="JMC+w11.5c/0.45c+h", cmap=str(cpt),
+                frame=["xaf+lLOS velocity (mm/year)"],
+            )
+            colorbar_figure.savefig(colorbar_output, dpi=300)
             if deformation_point and stable_point:
                 timeseries_output = args.output.with_name(
                     f"{args.output.stem}_timeseries{args.output.suffix}"
@@ -1216,6 +1229,9 @@ def main() -> None:
                 )
                 timeseries_figure.savefig(timeseries_output, dpi=300)
     print(f"Wrote {asf_map_output}")
+    print(f"Wrote {zoom_map_output}")
+    if 'colorbar_output' in locals():
+        print(f"Wrote {colorbar_output}")
     print(f"Wrote {zoom_map_output}")
     if deformation_point and stable_point:
         print(f"Anomalous-change point:      lon={deformation_point[0]:.6f}, lat={deformation_point[1]:.6f}")
