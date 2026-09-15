@@ -572,21 +572,22 @@ def pixel_center(target: GridReference, row: int, col: int) -> tuple[float, floa
     return float(x), float(y)
 
 
-def interactive_select_deformation_point(
+def interactive_select_two_points(
     args: argparse.Namespace, target: GridReference
-) -> tuple[float, float]:
-    """Let the user inspect as many ZoomInSAR candidates as needed.
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Interactively inspect and confirm deformation and reference points.
 
-    Left-click the velocity map to update the candidate time series.  Press
-    Enter/Return to accept the current candidate.  Escape closes the selector
-    without accepting a point.
+    Stage 1: left-click as many candidates as desired, then press Enter to
+    confirm the deformation point.  Stage 2: continue testing candidates and
+    press Enter again to confirm the no-deformation/reference point.  Escape
+    cancels the selector.  The time-series panel updates after every click.
     """
     try:
         import matplotlib.pyplot as plt
     except ImportError as error:
         raise RuntimeError(
             "Interactive point selection requires matplotlib. Install it or use "
-            "--point-lon/--point-lat for a non-interactive run."
+            "--point-lon/--point-lat for a non-interactive deformation point."
         ) from error
 
     west, east, south, north = target.region
@@ -597,18 +598,30 @@ def interactive_select_deformation_point(
         aspect="auto",
     )
     fig.colorbar(image, ax=map_ax, label="LOS velocity (mm/year)")
-    map_ax.set_title("Click candidates; press Enter to accept")
     map_ax.set_xlabel("Longitude")
     map_ax.set_ylabel("Latitude")
-    ts_ax.set_title("Candidate ZoomInSAR time series")
     ts_ax.set_xlabel("Time (YYYY)")
     ts_ax.set_ylabel("Relative LOS displacement (m)")
     ts_ax.grid(alpha=0.25)
 
-    state: dict[str, object] = {"point": None, "accepted": None, "marker": None}
+    state: dict[str, object] = {
+        "stage": "deformation", "point": None,
+        "deformation": None, "reference": None, "current_marker": None,
+    }
     tested_x: list[float] = []
     tested_y: list[float] = []
-    tested_artist = map_ax.scatter([], [], s=20, facecolors="none", edgecolors="0.35", label="Tested")
+    tested_artist = map_ax.scatter([], [], s=20, facecolors="none", edgecolors="0.35")
+    deformation_artist = None
+
+    def update_instructions() -> None:
+        if state["stage"] == "deformation":
+            map_ax.set_title("1/2: Test deformation points; Enter = confirm")
+            ts_ax.set_title("Deformation-point candidate")
+        else:
+            map_ax.set_title("2/2: Test reference points; Enter = confirm")
+            ts_ax.set_title("No-deformation/reference candidate")
+
+    update_instructions()
 
     def on_click(event) -> None:
         if event.inaxes is not map_ax or event.xdata is None or event.ydata is None:
@@ -625,29 +638,60 @@ def interactive_select_deformation_point(
         if np.count_nonzero(finite) < 2:
             print(f"Candidate lon={point[0]:.6f}, lat={point[1]:.6f} has fewer than two valid observations.")
             return
+
         tested_x.append(point[0]); tested_y.append(point[1])
         tested_artist.set_offsets(np.column_stack([tested_x, tested_y]))
-        if state["marker"] is not None:
-            state["marker"].remove()
-        state["marker"] = map_ax.scatter(
-            [point[0]], [point[1]], marker="*", s=180, c="yellow",
-            edgecolors="black", linewidths=0.8, zorder=5, label="Current candidate"
+        if state["current_marker"] is not None:
+            state["current_marker"].remove()
+        marker = "*" if state["stage"] == "deformation" else "o"
+        face = "yellow" if state["stage"] == "deformation" else "white"
+        state["current_marker"] = map_ax.scatter(
+            [point[0]], [point[1]], marker=marker, s=180 if marker == "*" else 110,
+            c=face, edgecolors="black", linewidths=0.9, zorder=6
         )
         state["point"] = point
+
         ts_ax.clear()
         ts_ax.plot(dates, values, "o-", markersize=3, linewidth=1.2)
         ts_ax.axhline(0, color="0.65", linewidth=0.8)
-        ts_ax.set_title(f"Candidate: {point[0]:.5f}, {point[1]:.5f}")
+        role = "Deformation" if state["stage"] == "deformation" else "Reference"
+        ts_ax.set_title(f"{role} candidate: {point[0]:.5f}, {point[1]:.5f}")
         ts_ax.set_xlabel("Time (YYYY)")
         ts_ax.set_ylabel("Relative LOS displacement (m)")
         ts_ax.grid(alpha=0.25)
         fig.canvas.draw_idle()
-        print(f"Testing deformation candidate: lon={point[0]:.6f}, lat={point[1]:.6f}. Press Enter to accept or click another point.")
+        print(f"Testing {role.lower()} candidate: lon={point[0]:.6f}, lat={point[1]:.6f}. "
+              "Click another point to test it, or press Enter to confirm.")
 
     def on_key(event) -> None:
+        nonlocal deformation_artist
         if event.key in ("enter", "return") and state["point"] is not None:
-            state["accepted"] = state["point"]
-            plt.close(fig)
+            if state["stage"] == "deformation":
+                state["deformation"] = state["point"]
+                point = state["deformation"]
+                if state["current_marker"] is not None:
+                    state["current_marker"].remove()
+                    state["current_marker"] = None
+                deformation_artist = map_ax.scatter(
+                    [point[0]], [point[1]], marker="*", s=180, c="yellow",
+                    edgecolors="black", linewidths=0.9, zorder=6,
+                    label="Confirmed deformation point"
+                )
+                state["stage"] = "reference"
+                state["point"] = None
+                update_instructions()
+                ts_ax.clear()
+                ts_ax.set_title("Click candidates for the no-deformation/reference point")
+                ts_ax.set_xlabel("Time (YYYY)")
+                ts_ax.set_ylabel("Relative LOS displacement (m)")
+                ts_ax.grid(alpha=0.25)
+                fig.canvas.draw_idle()
+                print("Deformation point confirmed. Now choose the no-deformation/reference point; "
+                      "press Enter a second time to confirm it.")
+            else:
+                state["reference"] = state["point"]
+                print("Reference point confirmed. Both selections are complete.")
+                plt.close(fig)
         elif event.key == "escape":
             plt.close(fig)
 
@@ -655,12 +699,14 @@ def interactive_select_deformation_point(
     fig.canvas.mpl_connect("key_press_event", on_key)
     fig.tight_layout()
     plt.show()
-    if state["accepted"] is None:
+
+    if state["deformation"] is None or state["reference"] is None:
         raise ValueError(
-            "No deformation point was accepted. Click a candidate and press Enter, "
-            "or rerun with --point-lon/--point-lat."
+            "Both points must be confirmed: click/inspect a deformation point and press Enter, "
+            "then click/inspect a no-deformation/reference point and press Enter again."
         )
-    return state["accepted"]  # type: ignore[return-value]
+    return state["deformation"], state["reference"]  # type: ignore[return-value]
+
 
 
 def choose_stable_point(
@@ -717,16 +763,22 @@ def choose_stable_point(
 def choose_zoom_deformation_and_stable_points(
     args: argparse.Namespace, target: GridReference
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Choose a user-reviewed deformation point and an automatic stable point."""
+    """Choose both ZoomInSAR points interactively, with two confirmations.
+
+    If --point-lon/--point-lat are supplied, they remain a non-interactive
+    deformation-point override and the stable point is selected automatically
+    for backward-compatible batch runs.  Otherwise both points are chosen by
+    the two-stage interactive selector.
+    """
     if (args.point_lon is None) != (args.point_lat is None):
         raise ValueError("Provide both --point-lon and --point-lat.")
     if args.point_lon is not None:
         deforming = (float(args.point_lon), float(args.point_lat))
         print(f"Using command-line deformation point: lon={deforming[0]:.6f}, lat={deforming[1]:.6f}")
-    else:
-        deforming = interactive_select_deformation_point(args, target)
-    stable = choose_stable_point(args, target, deforming)
-    return deforming, stable
+        # Preserve batch-mode behavior when an explicit deformation point is supplied.
+        stable = choose_stable_point(args, target, deforming)
+        return deforming, stable
+    return interactive_select_two_points(args, target)
 
 def load_shape(data_dir: Path) -> tuple[int, int]:
     metadata = data_dir / "crop_metadata.json"
