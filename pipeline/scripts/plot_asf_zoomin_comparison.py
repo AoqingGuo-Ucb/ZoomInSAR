@@ -760,7 +760,8 @@ def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, regio
                 fig.plot(x=longitude, y=latitude, style="a0.30c", fill="yellow", pen="0.75p,black")
             else:
                 fig.plot(x=longitude, y=latitude, style="c0.25c", fill="white", pen="0.75p,black")
-    fig.basemap(map_scale=f"jBL+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
+    # Put the scale bar in the upper-left blank map area, away from the colorbar.
+    fig.basemap(map_scale=f"jTL+o0.25c/0.25c+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
 
 
 def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
@@ -776,7 +777,7 @@ def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
     region = [min(zoom_dates).strftime("%Y-%m-%d"), max(zoom_dates).strftime("%Y-%m-%d"), ymin, ymax]
     fig.basemap(
         region=region, projection="X25c/7c",
-        frame=["pxa1Yf3o", "ya+lRelative LOS displacement (m)",
+        frame=["pxa1Yf3o+lTime (YYYY)", "ya+lRelative LOS displacement (m)",
                "+t(c) ZoomInSAR deformation and stable-point time series"],
     )
     fig.plot(x=zoom_dates, y=deformation_values, pen="1.3p,180/25/25",
@@ -899,19 +900,23 @@ def main() -> None:
         ):
             projection = "M13c"
             asf_figure = pygmt.Figure()
-            map_points = None
-            if deformation_point and stable_point:
-                map_points = [(*deformation_point, "Deformation"), (*stable_point, "Stable")]
+            # Panel (a) intentionally has no ZoomInSAR point markers.
             plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
-                     "(a) ASF/OPERA LOS velocity", map_points, args.transparency, scale_km)
-            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
+                     "(a) ASF/OPERA LOS velocity", None, args.transparency, scale_km)
+            # Place the colorbar fully below the map frame in dedicated blank space.
+            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-2.0c+h", cmap=str(cpt),
                                 frame=["xaf+lLOS velocity (mm/year)"])
             asf_figure.savefig(asf_map_output, dpi=300)
 
             zoom_figure = pygmt.Figure()
+            # Show both time-series locations only on the ZoomInSAR map.
+            zoom_map_points = None
+            if deformation_point and stable_point:
+                zoom_map_points = [(*deformation_point, "Deformation"), (*stable_point, "Stable")]
             plot_map(zoom_figure, dem, zoom_velocity, zoom.region, projection, str(cpt),
-                     "(b) ZoomInSAR LOS velocity", map_points, args.transparency, scale_km)
-            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
+                     "(b) ZoomInSAR LOS velocity", zoom_map_points, args.transparency, scale_km)
+            # Place the colorbar fully below the map frame in dedicated blank space.
+            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-2.0c+h", cmap=str(cpt),
                                  frame=["xaf+lLOS velocity (mm/year)"])
             zoom_figure.savefig(zoom_map_output, dpi=300)
             if deformation_point and stable_point:
