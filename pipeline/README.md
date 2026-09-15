@@ -100,18 +100,17 @@ are written to `crop_metadata.json` for traceability.
 
 ## Compare ASF/OPERA and ZoomInSAR products
 
-`scripts/plot_asf_zoomin_comparison.py` makes one PyGMT figure: ASF/OPERA LOS
-velocity over DEM hillshade in panel (a), ZoomInSAR LOS velocity over the same
-hillshade in panel (b), and a selected-point displacement time-series comparison
-in panel (c). The ZoomInSAR velocity GeoTIFF defines the longitude/latitude
-region and pixel grid, so ASF and DEM values are resampled to exactly the same
-spatial extent. Both maps use the same blue-negative, white-zero, red-positive
-velocity colour range.
+`scripts/plot_asf_zoomin_comparison.py` makes three PyGMT figures: ASF/OPERA
+LOS velocity, ZoomInSAR LOS velocity, and their common representative-point
+time-series. Separating the panels prevents titles, colourbars, legends, and map
+labels from overlapping. The two velocity figures use the same colour range and
+the script selects a ZoomInSAR representative point only when that same point
+also has at least two valid ASF observations.
 
 Install the plotting and ASF download dependencies once:
 
 ```bash
-conda install -n insar -c conda-forge pygmt gmt rasterio xarray netcdf4 asf-search
+conda install -n insar -c conda-forge pygmt gmt rasterio xarray netcdf4 scipy asf-search
 ```
 
 ### Set the ASF/Earthdata account once
@@ -152,7 +151,8 @@ an ASF velocity over exactly that overlap. It saves
 ```bash
 python3 scripts/plot_asf_zoomin_comparison.py \
   --auto-asf-overlap \
-  --project-root ~/Bhaltos/AoqingShare/CA_Landfill/Chiquita
+  --project-root ~/Bhaltos/AoqingShare/CA_Landfill/Chiquita \
+  --asf-flight-direction descending
 ```
 
 With `--project-root`, the script automatically uses `work/dem.tif`,
@@ -161,6 +161,26 @@ With `--project-root`, the script automatically uses `work/dem.tif`,
 `ASF_overlap_downloads` by default, so no repeated long folder paths are needed.
 If you already know the correct ASF track, optionally add
 `--asf-reference-granule GRANULE_NAME`; otherwise do not use this option.
+Set `--asf-flight-direction` to the same ascending/descending direction as the
+ZoomInSAR input. In automatic mode the script derives **both** ASF and
+ZoomInSAR velocity from the exact ASF overlap dates, so their temporal periods
+are matched. When a direction is specified, downloads are placed in its own
+folder, for example `ASF_overlap_downloads/descending`, so older ascending
+files are not reused.
+
+The default figures are saved outside the dataset folder, directly in:
+
+```text
+ZoomInSAR_Results/asf_vs_zoomin_asf_velocity.png
+ZoomInSAR_Results/asf_vs_zoomin_zoomin_velocity.png
+ZoomInSAR_Results/asf_vs_zoomin_timeseries.png
+```
+
+The maps use one consistent Helvetica font family and a common-point star
+marker. The script calculates the map width and automatically selects a familiar
+scale-bar length (for example 0.25, 0.5, or 1 km) that stays below half of the
+map width. Use `--output /your/path/name.png` only when you want a different
+output location or base filename.
 
 If an ASF connection drops during a large NetCDF download, rerun the same
 command. The script reuses readable completed files, removes only the incomplete

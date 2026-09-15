@@ -32,6 +32,7 @@ import rasterio
 import xarray as xr
 from rasterio.transform import array_bounds
 from rasterio.warp import Resampling, reproject
+from scipy.interpolate import griddata
 
 
 DATE_PAIR = re.compile(r"(20\d{6})[_-](20\d{6})")
@@ -66,6 +67,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--asf-reference-granule",
                          help=("Optional ASF granule used to force its orbit/direction. Usually omit this; "
                                "automatic mode otherwise selects the best-covered compatible DISP track."))
+    command.add_argument("--asf-flight-direction", choices=("ascending", "descending"),
+                         help=("ASF flight direction for --auto-asf-overlap. Set this to descending when "
+                               "the ZoomInSAR input is descending; it prevents an ascending-track comparison."))
     command.add_argument("--asf-max-products", type=int, default=5000,
                          help=("Safety limit for ASF catalogue search results before track filtering "
                                "(default: 5000; products are filtered before download)."))
@@ -183,8 +187,11 @@ def apply_project_defaults(args: argparse.Namespace) -> None:
     args.dem = args.dem or root / "work" / "dem.tif"
     args.zoom_timeseries_dir = args.zoom_timeseries_dir or timeseries
     args.zoom_data_dir = args.zoom_data_dir or data
-    args.asf_download_dir = args.asf_download_dir or root / "ASF_overlap_downloads"
-    args.output = args.output or root / "asf_vs_zoomin_overlap.png"
+    default_downloads = root / "ASF_overlap_downloads"
+    if args.asf_flight_direction:
+        default_downloads /= args.asf_flight_direction
+    args.asf_download_dir = args.asf_download_dir or default_downloads
+    args.output = args.output or results / "asf_vs_zoomin.png"
 
 
 def download_asf_granule(granule: str, destination: Path) -> Path:
@@ -275,12 +282,14 @@ def derive_asf_velocity(displacements: np.ndarray, dates: list[datetime]) -> np.
 
 
 def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, reference_granule: str | None,
+                         flight_direction: str | None,
                          destination: Path, max_products: int) -> list[tuple[Path, datetime]]:
     """Download compatible OPERA DISP rasters for the ZoomInSAR/ASF time overlap.
 
     Products are grouped by orbit/direction so ascending and descending LOS
-    observations are never mixed. The best-covered group is selected by default;
-    an optional reference granule can force a known matching group.
+    observations are never mixed. A requested direction is honored; otherwise
+    the best-covered group is selected. An optional reference granule can force
+    a known matching group.
     """
     if max_products < 2:
         raise ValueError("--asf-max-products must be at least 2.")
@@ -317,6 +326,13 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
     if reference_orbit:
         selected = groups.get((reference_orbit, reference_direction.lower()), [])
         selection_method = f"reference granule {reference_granule}"
+    elif flight_direction:
+        direction_groups = [item for item in groups.items() if item[0][1] == flight_direction]
+        if direction_groups:
+            track, selected = max(direction_groups, key=lambda item: (len(item[1]), item[0]))
+            selection_method = f"largest {flight_direction} group ({track[0]}, {track[1]})"
+        else:
+            selected, selection_method = [], f"no {flight_direction} group"
     elif groups:
         track, selected = max(groups.items(), key=lambda item: (len(item[1]), item[0]))
         selection_method = f"largest compatible group ({track[0]}, {track[1]})"
@@ -456,6 +472,19 @@ def write_velocity_cpt(path: Path, vmax: float) -> None:
     )
 
 
+def suitable_scale_km(region: tuple[float, float, float, float]) -> float:
+    """Choose a familiar scale-bar length that occupies less than half the map width."""
+    west, east, south, north = region
+    mid_latitude = np.deg2rad((south + north) / 2)
+    width_km = abs(east - west) * 111.32 * np.cos(mid_latitude)
+    maximum = width_km * 0.45
+    candidates = np.array([
+        0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100,
+    ])
+    valid = candidates[candidates <= maximum]
+    return float(valid[-1]) if len(valid) else float(candidates[0])
+
+
 def point_from_file(path: Path) -> tuple[float, float]:
     if path.suffix.lower() == ".csv":
         with path.open(encoding="utf-8", newline="") as stream:
@@ -483,6 +512,49 @@ def choose_point(args: argparse.Namespace) -> tuple[float, float]:
         raise ValueError("Set --point-lon/--point-lat or provide --point-file for panel (c).")
     require_file(candidate, "Representative point file")
     return point_from_file(candidate)
+
+
+def representative_point_candidates(args: argparse.Namespace) -> list[tuple[float, float]]:
+    """Return explicit point(s), or all ZoomInSAR representative points in rank order."""
+    if (args.point_lon is None) != (args.point_lat is None):
+        raise ValueError("Provide both --point-lon and --point-lat.")
+    if args.point_lon is not None:
+        return [(args.point_lon, args.point_lat)]
+    if args.point_file:
+        require_file(args.point_file, "Representative point file")
+        if args.point_file.suffix.lower() != ".csv":
+            return [point_from_file(args.point_file)]
+        with args.point_file.open(encoding="utf-8", newline="") as stream:
+            return [(float(row["longitude"]), float(row["latitude"])) for row in csv.DictReader(stream)]
+    source = args.zoom_timeseries_dir / "representative_points.csv"
+    require_file(source, "ZoomInSAR representative-point file")
+    with source.open(encoding="utf-8", newline="") as stream:
+        return [(float(row["longitude"]), float(row["latitude"])) for row in csv.DictReader(stream)]
+
+
+def asf_series_at_point(stack: np.ndarray, target: GridReference,
+                        point: tuple[float, float]) -> np.ndarray | None:
+    row, col = rasterio.transform.rowcol(target.transform, point[0], point[1])
+    if not (0 <= row < stack.shape[1] and 0 <= col < stack.shape[2]):
+        return None
+    values = np.asarray(stack[:, row, col], dtype=float)
+    if np.count_nonzero(np.isfinite(values)) < 2:
+        return None
+    values -= values[np.flatnonzero(np.isfinite(values))[0]]
+    return values
+
+
+def select_common_representative_point(args: argparse.Namespace, asf_stack: np.ndarray,
+                                       target: GridReference) -> tuple[tuple[float, float], np.ndarray]:
+    """Choose a ZoomInSAR representative point that also has an ASF time series."""
+    for point in representative_point_candidates(args):
+        series = asf_series_at_point(asf_stack, target, point)
+        if series is not None:
+            return point, series
+    raise ValueError(
+        "None of the ZoomInSAR representative points has at least two valid ASF observations. "
+        "Choose another --point-lon/--point-lat or inspect the ASF quality mask."
+    )
 
 
 def load_shape(data_dir: Path) -> tuple[int, int]:
@@ -526,6 +598,51 @@ def nearest_radar_pixel(data_dir: Path, longitude: float, latitude: float) -> tu
     if not np.isfinite(distance[row, col]):
         raise ValueError("No finite longitude/latitude pixel is available for the selected point.")
     return int(row), int(col)
+
+
+def load_radar_geolocation(data_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read the native ZoomInSAR longitude/latitude rasters."""
+    shape = load_shape(data_dir)
+    geo_dir = data_dir / "GEO"
+    longitude = np.fromfile(find_geo_file(geo_dir, "lon"), dtype=">f4").reshape(shape)
+    latitude = np.fromfile(find_geo_file(geo_dir, "lat"), dtype=">f4").reshape(shape)
+    return longitude, latitude
+
+
+def geocode_radar_velocity(velocity: np.ndarray, data_dir: Path, target: GridReference) -> np.ndarray:
+    """Interpolate a native-grid ZoomInSAR velocity map to the comparison GeoTIFF grid."""
+    longitude, latitude = load_radar_geolocation(data_dir)
+    valid = (np.isfinite(velocity) & np.isfinite(longitude) & np.isfinite(latitude)
+             & (longitude != 0) & (latitude != 0))
+    if np.count_nonzero(valid) < 4:
+        raise ValueError("Too few valid ZoomInSAR pixels to calculate overlap-period velocity.")
+    height, width = target.data.shape
+    xs = target.transform.c + (np.arange(width) + 0.5) * target.transform.a
+    ys = target.transform.f + (np.arange(height) + 0.5) * target.transform.e
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    points = np.column_stack((longitude[valid], latitude[valid]))
+    regular = griddata(points, velocity[valid], (grid_x, grid_y), method="linear")
+    return regular.astype(np.float32)
+
+
+def overlap_zoom_velocity(timeseries_dir: Path, data_dir: Path, start: datetime, end: datetime,
+                           target: GridReference) -> np.ndarray:
+    """Fit ZoomInSAR velocity from precisely the same date interval as ASF."""
+    require_file(timeseries_dir / "cumulative_los_displacement_m.npy", "ZoomInSAR displacement stack")
+    require_file(timeseries_dir / "dates.json", "ZoomInSAR dates")
+    dates = [datetime.fromisoformat(value) for value in json.loads(
+        (timeseries_dir / "dates.json").read_text(encoding="utf-8")
+    )]
+    stack = np.load(timeseries_dir / "cumulative_los_displacement_m.npy", mmap_mode="r")
+    selected = [index for index, date in enumerate(dates) if start <= date <= end]
+    if len(selected) < 2:
+        raise ValueError(
+            "Fewer than two ZoomInSAR acquisitions fall within the ASF overlap dates; "
+            "cannot make a matched-period velocity comparison."
+        )
+    velocity = derive_asf_velocity(np.asarray(stack[selected], dtype=np.float32),
+                                   [dates[index] for index in selected])
+    return geocode_radar_velocity(velocity * 1000.0, data_dir, target)
 
 
 def load_zoom_timeseries(directory: Path, data_dir: Path, longitude: float, latitude: float) -> tuple[list[datetime], np.ndarray]:
@@ -580,14 +697,14 @@ def load_auto_asf_stack(records: list[tuple[Path, datetime]], target: GridRefere
 
 def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, region: tuple[float, ...],
              projection: str, cpt: str, title: str, point: tuple[float, float] | None,
-             transparency: float) -> None:
+             transparency: float, scale_km: float) -> None:
     shade = pygmt.grdgradient(grid=dem, azimuth=315, normalize="t1")
     fig.grdimage(grid=dem, region=region, projection=projection, cmap="gray", shading=shade,
-                 frame=["af", f'+t"{title}"'])
+                 frame=["af", f"+t{title}"])
     fig.grdimage(grid=velocity, cmap=cpt, transparency=transparency)
     if point:
-        fig.plot(x=point[0], y=point[1], style="c0.22c", fill="yellow", pen="0.6p,black")
-    fig.basemap(map_scale="jBL+w2k+f+lkm", rose="jTR+w1.5c+f2+l")
+        fig.plot(x=point[0], y=point[1], style="a0.30c", fill="yellow", pen="0.75p,black")
+    fig.basemap(map_scale=f"jBL+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
 
 
 def plot_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime], zoom_values: np.ndarray,
@@ -599,7 +716,7 @@ def plot_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime], zoom_values: 
     ymin, ymax = float(np.nanmin(finite) - span * 0.15), float(np.nanmax(finite) + span * 0.15)
     region = [min(all_dates).strftime("%Y-%m-%d"), max(all_dates).strftime("%Y-%m-%d"), ymin, ymax]
     fig.basemap(region=region, projection="X25c/7c",
-                frame=["pxa1Yf3o", 'ya+l"Relative LOS displacement (m)"', '+t"(c) Representative-point time series"'])
+                frame=["pxa1Yf3o", "ya+lRelative LOS displacement (m)", "+t(c) Common representative-point time series"])
     fig.plot(x=zoom_dates, y=zoom_values, pen="1.3p,black", style="c0.10c", fill="black", label="ZoomInSAR")
     fig.plot(x=asf_dates, y=asf_values, pen="1.3p,180/25/25", style="t0.16c", fill="180/25/25", label="ASF/OPERA")
     fig.legend(position="jTR+o0.2c", box="+gwhite+p0.25p")
@@ -639,7 +756,7 @@ def main() -> None:
     dem_name = str(args.dem)
     dem = to_dataarray(reproject_to_zoom(dem_name, zoom), zoom, "dem")
     zoom_velocity = to_dataarray(zoom.data, zoom, "zoomin_velocity_mm_year")
-    point = None if args.no_timeseries else choose_point(args)
+    point = None
 
     zoom_dates: list[datetime] = []
     zoom_series = np.asarray([])
@@ -650,13 +767,10 @@ def main() -> None:
         zoom_dates = [datetime.fromisoformat(value) for value in json.loads(
             (args.zoom_timeseries_dir / "dates.json").read_text(encoding="utf-8")
         )]
-    if point:
-        zoom_dates, zoom_series = load_zoom_timeseries(
-            args.zoom_timeseries_dir, args.zoom_data_dir, *point
-        )
     if args.auto_asf_overlap:
         records = download_asf_overlap(
-            zoom_dates, zoom, args.asf_reference_granule, args.asf_download_dir, args.asf_max_products
+            zoom_dates, zoom, args.asf_reference_granule, args.asf_flight_direction,
+            args.asf_download_dir, args.asf_max_products
         )
         asf_dates, asf_stack = load_auto_asf_stack(
             records, zoom, args.asf_displacement_subdataset, args.asf_displacement_scale
@@ -664,18 +778,25 @@ def main() -> None:
         asf_velocity = to_dataarray(
             derive_asf_velocity(asf_stack, asf_dates) * 1000.0, zoom, "asf_velocity_mm_year"
         )
-        if point:
-            row, col = rasterio.transform.rowcol(zoom.transform, point[0], point[1])
-            asf_series = np.asarray(asf_stack[:, row, col], dtype=float)
-            valid = np.flatnonzero(np.isfinite(asf_series))
-            if not len(valid):
-                raise ValueError("The selected point is outside the ASF overlap stack.")
-            asf_series -= asf_series[valid[0]]
+        zoom_velocity = to_dataarray(
+            overlap_zoom_velocity(args.zoom_timeseries_dir, args.zoom_data_dir,
+                                  min(asf_dates), max(asf_dates), zoom),
+            zoom, "zoomin_velocity_overlap_mm_year"
+        )
+        if not args.no_timeseries:
+            point, asf_series = select_common_representative_point(args, asf_stack, zoom)
+            zoom_dates, zoom_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *point
+            )
     else:
         asf_velocity_layer = choose_subdataset(args.asf_nc, args.asf_velocity_subdataset, "velocity")
         asf_velocity = to_dataarray(reproject_to_zoom(asf_velocity_layer, zoom) * args.asf_velocity_scale,
                                     zoom, "asf_velocity_mm_year")
-        if point:
+        if not args.no_timeseries:
+            point = choose_point(args)
+            zoom_dates, zoom_series = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *point
+            )
             asf_dates, asf_series = sample_asf_displacement(
                 args.asf_timeseries_nc, zoom, *point, args.asf_displacement_subdataset
             )
@@ -683,21 +804,39 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="zoomin_asf_") as temporary:
         cpt = Path(temporary) / "velocity.cpt"
         write_velocity_cpt(cpt, args.vmax_mm_year)
-        fig = pygmt.Figure()
-        projection = "M12c"
-        plot_map(fig, dem, asf_velocity, zoom.region, projection, str(cpt),
-                 "(a) ASF/OPERA LOS velocity", point, args.transparency)
-        fig.shift_origin(xshift="13.5c")
-        plot_map(fig, dem, zoom_velocity, zoom.region, projection, str(cpt),
-                 "(b) ZoomInSAR LOS velocity", point, args.transparency)
-        fig.shift_origin(xshift="-13.5c", yshift="-10.5c")
-        if point:
-            plot_timeseries(fig, zoom_dates, zoom_series, asf_dates, asf_series)
-        fig.colorbar(position="JBC+w11c/0.4c+o0c/-8.4c+h", cmap=str(cpt),
-                     frame=['xaf+l"LOS velocity (mm/year): blue negative, red positive"'])
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output, dpi=300)
-    print(f"Wrote {args.output}")
+        asf_map_output = args.output.with_name(f"{args.output.stem}_asf_velocity{args.output.suffix}")
+        zoom_map_output = args.output.with_name(f"{args.output.stem}_zoomin_velocity{args.output.suffix}")
+        scale_km = suitable_scale_km(zoom.region)
+        with pygmt.config(
+            FONT_TITLE="18p,Helvetica-Bold",
+            FONT_LABEL="14p,Helvetica", FONT_ANNOT_PRIMARY="12p,Helvetica",
+        ):
+            projection = "M13c"
+            asf_figure = pygmt.Figure()
+            plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
+                     "(a) ASF/OPERA LOS velocity", point, args.transparency, scale_km)
+            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
+                                frame=["xaf+lLOS velocity (mm/year)"])
+            asf_figure.savefig(asf_map_output, dpi=300)
+
+            zoom_figure = pygmt.Figure()
+            plot_map(zoom_figure, dem, zoom_velocity, zoom.region, projection, str(cpt),
+                     "(b) ZoomInSAR LOS velocity", point, args.transparency, scale_km)
+            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-1.0c+h", cmap=str(cpt),
+                                 frame=["xaf+lLOS velocity (mm/year)"])
+            zoom_figure.savefig(zoom_map_output, dpi=300)
+            if point:
+                timeseries_output = args.output.with_name(
+                    f"{args.output.stem}_timeseries{args.output.suffix}"
+                )
+                timeseries_figure = pygmt.Figure()
+                plot_timeseries(timeseries_figure, zoom_dates, zoom_series, asf_dates, asf_series)
+                timeseries_figure.savefig(timeseries_output, dpi=300)
+    print(f"Wrote {asf_map_output}")
+    print(f"Wrote {zoom_map_output}")
+    if point:
+        print(f"Wrote {timeseries_output}")
 
 
 if __name__ == "__main__":
