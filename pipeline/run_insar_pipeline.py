@@ -126,6 +126,16 @@ def main() -> None:
     parser.add_argument("--pair", help="Reprocess one YYYYMMDD-YYYYMMDD pair through detrending")
     parser.add_argument("--max-baseline-days", type=int, default=12)
     parser.add_argument(
+        "--timeseries-phase-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=1.0,
+        help=(
+            "LOS sign applied when converting unwrapped phase to displacement (default: 1). "
+            "Use -1 only when validating a SWEETS result against a same-track external product."
+        ),
+    )
+    parser.add_argument(
         "--allow-low-quality-bridges",
         action="store_true",
         dest="allow_low_quality_bridges",
@@ -407,6 +417,7 @@ def main() -> None:
                     "--unwrapping-root", str(unwrapping_output),
                     "--output-dir", str(preliminary_output),
                     "--max-baseline-days", str(args.max_baseline_days),
+                    "--phase-sign", str(args.timeseries_phase_sign),
                     *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                     *dataset_args,
                 ],
@@ -490,6 +501,7 @@ def main() -> None:
                 "--detrending-root", str(detrending_output),
                 "--output-dir", str(timeseries_output),
                 "--max-baseline-days", str(args.max_baseline_days),
+                "--phase-sign", str(args.timeseries_phase_sign),
                 *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                 *dataset_args,
             ],

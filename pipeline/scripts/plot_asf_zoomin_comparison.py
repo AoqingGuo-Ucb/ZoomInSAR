@@ -36,6 +36,10 @@ from scipy.interpolate import griddata
 
 
 DATE_PAIR = re.compile(r"(20\d{6})[_-](20\d{6})")
+OPERA_DISP_NAME = re.compile(
+    r"OPERA_L3_DISP-S1_IW_F(?P<frame>\d+)_VV_"
+    r"(?P<reference>20\d{6})T\d{6}Z_(?P<secondary>20\d{6})T\d{6}Z"
+)
 
 
 @dataclass(frozen=True)
@@ -256,6 +260,18 @@ def product_filename(product) -> str:
     return product_property(product, "fileName", "fileID", "sceneName", "url") or ""
 
 
+def opera_disp_identity(name: str) -> tuple[str, datetime, datetime]:
+    """Get the OPERA frame, reference acquisition, and secondary acquisition."""
+    match = OPERA_DISP_NAME.search(Path(name).name)
+    if not match:
+        raise ValueError(f"Cannot parse OPERA DISP frame/reference dates from {name!r}")
+    return (
+        match.group("frame"),
+        datetime.strptime(match.group("reference"), "%Y%m%d"),
+        datetime.strptime(match.group("secondary"), "%Y%m%d"),
+    )
+
+
 def overlap_wkt(region: tuple[float, float, float, float]) -> str:
     west, east, south, north = region
     return (f"POLYGON(({west} {south},{east} {south},{east} {north},"
@@ -311,20 +327,26 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
         end=end.strftime("%Y-%m-%dT23:59:59Z"),
         maxResults=max_products + 1,
     )
-    groups: dict[tuple[str, str], list] = {}
+    groups: dict[tuple[str, str, str], list] = {}
     for product in results:
         name = product_filename(product).lower()
         product_orbit = product_property(product, "relativeOrbit", "pathNumber")
         product_direction = product_property(product, "flightDirection")
         if "disp" in name and name.endswith(".nc") and product_orbit and product_direction:
-            key = (product_orbit, product_direction.lower())
+            try:
+                frame, _, _ = opera_disp_identity(product_filename(product))
+            except ValueError:
+                continue
+            key = (product_orbit, product_direction.lower(), frame)
             groups.setdefault(key, []).append(product)
     if len(results) > max_products:
         raise ValueError(
             f"ASF search exceeded --asf-max-products={max_products}; narrow the map region or raise the limit."
         )
     if reference_orbit:
-        selected = groups.get((reference_orbit, reference_direction.lower()), [])
+        matching = [item for item in groups.items()
+                    if item[0][0] == reference_orbit and item[0][1] == reference_direction.lower()]
+        _, selected = max(matching, key=lambda item: (len(item[1]), item[0])) if matching else (None, [])
         selection_method = f"reference granule {reference_granule}"
     elif flight_direction:
         direction_groups = [item for item in groups.items() if item[0][1] == flight_direction]
@@ -339,31 +361,47 @@ def download_asf_overlap(zoom_dates: list[datetime], target: GridReference, refe
     else:
         selected = []
         selection_method = "none"
-    # ASF may return multiple processing versions/bursts for one date. Keep one
-    # product per acquisition date so the same epoch is never over-weighted.
+    # ASF may return multiple processing versions for one reference-secondary
+    # pair. Keep one version, but never collapse different reference groups:
+    # their displacement layers have different zero/reference epochs.
     one_per_date = {}
     for product in sorted(selected, key=product_date):
-        one_per_date.setdefault(product_date(product).date(), product)
+        _, reference, secondary = opera_disp_identity(product_filename(product))
+        one_per_date.setdefault((reference.date(), secondary.date()), product)
     selected = list(one_per_date.values())
     if len(selected) < 2:
         raise ValueError(
             "ASF found fewer than two matching OPERA DISP NetCDF products in the overlap. "
             "A velocity/time-series comparison cannot be made for this interval."
         )
-    orbit, direction = product_property(selected[0], "relativeOrbit", "pathNumber"), product_property(selected[0], "flightDirection")
+    orbit = product_property(selected[0], "relativeOrbit", "pathNumber")
+    direction = product_property(selected[0], "flightDirection")
+    frame, _, _ = opera_disp_identity(product_filename(selected[0]))
     destination.mkdir(parents=True, exist_ok=True)
     records: list[tuple[Path, datetime]] = []
     for product in sorted(selected, key=product_date):
         name = Path(product_filename(product)).name
         target_file = download_product_with_retries(product, destination, name, session)
         records.append((target_file, product_date(product)))
+    reference_groups: dict[datetime, list[datetime]] = {}
+    for path, _ in records:
+        _, reference, secondary = opera_disp_identity(path.name)
+        reference_groups.setdefault(reference, []).append(secondary)
     manifest = {
         "reference_granule": reference_granule,
         "track_selection": selection_method,
         "relative_orbit": orbit,
         "flight_direction": direction,
+        "frame": frame,
         "zoominsar_dates": [date.strftime("%Y-%m-%d") for date in zoom_dates],
         "asf_overlap_dates": [date.strftime("%Y-%m-%d") for _, date in records],
+        "reference_groups": [
+            {
+                "reference_date": reference.strftime("%Y-%m-%d"),
+                "secondary_dates": [date.strftime("%Y-%m-%d") for date in sorted(secondaries)],
+            }
+            for reference, secondaries in sorted(reference_groups.items())
+        ],
         "files": [str(path) for path, _ in records],
     }
     (destination / "asf_overlap_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -908,14 +946,60 @@ def sample_asf_displacement(paths: Iterable[Path], target: GridReference, longit
 
 def load_auto_asf_stack(records: list[tuple[Path, datetime]], target: GridReference,
                         requested: str | None, scale: float) -> tuple[list[datetime], np.ndarray]:
-    """Load the automatically downloaded common-reference DISP displacement stack."""
-    dates, grids = [], []
-    for path, date in records:
-        layer = choose_subdataset(path, requested, "displacement")
-        grids.append(reproject_to_zoom(layer, target) * scale)
-        dates.append(date)
-    order = np.argsort(dates)
-    return [dates[index] for index in order], np.stack(grids, axis=0)[order]
+    """Stitch OPERA DISP reference-date groups into one relative time series.
+
+    Each ``short_wavelength_displacement`` layer is relative to the reference
+    acquisition embedded in its own filename. OPERA changes that reference
+    periodically. Regressing raw layers from several groups creates artificial
+    jumps and an invalid velocity, so each group is added to the already
+    stitched grid at its reference date.
+    """
+    grouped: dict[datetime, list[tuple[datetime, Path]]] = {}
+    for path, _ in records:
+        _, reference, secondary = opera_disp_identity(path.name)
+        grouped.setdefault(reference, []).append((secondary, path))
+    if not grouped:
+        raise ValueError("No OPERA DISP products were available to build an ASF time series.")
+
+    stitched: dict[datetime, np.ndarray] = {}
+    first_reference = min(grouped)
+    for reference in sorted(grouped):
+        if reference == first_reference:
+            base = np.zeros(target.data.shape, dtype=np.float32)
+            stitched[reference] = base
+        elif reference in stitched:
+            base = stitched[reference]
+        else:
+            raise ValueError(
+                "ASF OPERA reference-date chain is discontinuous at "
+                f"{reference:%Y-%m-%d}; cannot safely combine these displacement groups. "
+                "Delete the incomplete ASF_overlap_downloads folder and rerun the command."
+            )
+        for secondary, path in sorted(grouped[reference]):
+            if secondary in stitched:
+                raise ValueError(
+                    f"ASF has more than one stitched displacement for {secondary:%Y-%m-%d}; "
+                    "choose one OPERA frame only."
+                )
+            layer = choose_subdataset(path, requested, "displacement")
+            relative = reproject_to_zoom(layer, target) * scale
+            stitched[secondary] = (base + relative).astype(np.float32)
+    dates = sorted(stitched)
+    return dates, np.stack([stitched[date] for date in dates], axis=0)
+
+
+def restrict_to_date_range(dates: list[datetime], values: np.ndarray, start: datetime,
+                           end: datetime) -> tuple[list[datetime], np.ndarray]:
+    """Keep a point series within the same time interval used for both maps."""
+    selected = [index for index, date in enumerate(dates) if start <= date <= end]
+    if len(selected) < 2:
+        raise ValueError("Fewer than two ZoomInSAR dates fall within the ASF overlap interval.")
+    clipped_dates = [dates[index] for index in selected]
+    clipped_values = np.asarray(values, dtype=float)[selected]
+    finite = np.flatnonzero(np.isfinite(clipped_values))
+    if len(finite):
+        clipped_values = clipped_values - clipped_values[finite[0]]
+    return clipped_dates, clipped_values
 
 
 def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, region: tuple[float, ...],
@@ -936,9 +1020,14 @@ def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, regio
 
 
 def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
-                         deformation_values: np.ndarray, stable_values: np.ndarray) -> None:
-    """Plot ZoomInSAR displacement at deforming and stable reference locations."""
-    all_values = np.concatenate([deformation_values, stable_values])
+                         deformation_values: np.ndarray, stable_values: np.ndarray,
+                         asf_dates: list[datetime] | None = None,
+                         asf_values: np.ndarray | None = None) -> None:
+    """Plot matched ASF/OPERA and ZoomInSAR displacement at one common point."""
+    pieces = [deformation_values, stable_values]
+    if asf_values is not None:
+        pieces.append(asf_values)
+    all_values = np.concatenate(pieces)
     finite = all_values[np.isfinite(all_values)]
     if not len(finite):
         raise ValueError("Both selected ZoomInSAR time series contain only NaN values.")
@@ -949,12 +1038,15 @@ def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
     fig.basemap(
         region=region, projection="X25c/7c",
         frame=["pxa1Yf3o+lTime (YYYY)", "ya+lRelative LOS displacement (m)",
-               "+t(c) ZoomInSAR deformation and stable-point time series"],
+               "+t(c) Matched representative-point LOS displacement time series"],
     )
+    if asf_dates and asf_values is not None:
+        fig.plot(x=asf_dates, y=asf_values, pen="1.3p,black",
+                 style="c0.10c", fill="black", label="ASF/OPERA")
     fig.plot(x=zoom_dates, y=deformation_values, pen="1.3p,180/25/25",
-             style="c0.11c", fill="180/25/25", label="Deformation zone")
-    fig.plot(x=zoom_dates, y=stable_values, pen="1.3p,black",
-             style="c0.10c", fill="white", label="No-deformation zone")
+             style="c0.11c", fill="180/25/25", label="ZoomInSAR")
+    fig.plot(x=zoom_dates, y=stable_values, pen="0.9p,90/90/90",
+             style="c0.09c", fill="white", label="ZoomInSAR stable point")
     fig.legend(position="jTR+o0.2c", box="+gwhite+p0.25p")
 
 def main() -> None:
@@ -1021,10 +1113,15 @@ def main() -> None:
             zoom, "zoomin_velocity_overlap_mm_year"
         )
         if not args.no_timeseries:
-            # ASF point availability is optional.  We still check it for diagnostics,
-            # but ZoomInSAR panel (c) no longer depends on finding a common ASF point.
-            _, asf_series = select_common_representative_point(args, asf_stack, zoom)
-            deformation_point, stable_point = choose_zoom_deformation_and_stable_points(args, zoom)
+            common_point, asf_series = select_common_representative_point(args, asf_stack, zoom)
+            if common_point is not None:
+                # This guarantees that the star in both maps and both curves in
+                # panel (c) refer to exactly the same physical pixel/location.
+                deformation_point = common_point
+                stable_point = choose_stable_point(args, zoom, deformation_point)
+                print("Using a common ZoomInSAR/ASF representative point for the comparison.")
+            else:
+                deformation_point, stable_point = choose_zoom_deformation_and_stable_points(args, zoom)
             zoom_dates, zoom_deformation_series = load_zoom_timeseries(
                 args.zoom_timeseries_dir, args.zoom_data_dir, *deformation_point
             )
@@ -1033,6 +1130,15 @@ def main() -> None:
             )
             if stable_dates != zoom_dates:
                 raise ValueError("ZoomInSAR time-series dates differ between selected points.")
+            overlap_start, overlap_end = min(asf_dates), max(asf_dates)
+            zoom_dates, zoom_deformation_series = restrict_to_date_range(
+                zoom_dates, zoom_deformation_series, overlap_start, overlap_end
+            )
+            stable_dates, zoom_stable_series = restrict_to_date_range(
+                stable_dates, zoom_stable_series, overlap_start, overlap_end
+            )
+            if stable_dates != zoom_dates:
+                raise ValueError("ZoomInSAR clipped time-series dates differ between selected points.")
     else:
         asf_velocity_layer = choose_subdataset(args.asf_nc, args.asf_velocity_subdataset, "velocity")
         asf_velocity = to_dataarray(reproject_to_zoom(asf_velocity_layer, zoom) * args.asf_velocity_scale,
@@ -1071,9 +1177,11 @@ def main() -> None:
         ):
             projection = "M13c"
             asf_figure = pygmt.Figure()
-            # Panel (a) intentionally has no ZoomInSAR point markers.
+            asf_map_points = None
+            if deformation_point:
+                asf_map_points = [(*deformation_point, "Deformation")]
             plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
-                     "(a) ASF/OPERA LOS velocity", None, args.transparency, scale_km)
+                     "(a) ASF/OPERA LOS velocity", asf_map_points, args.transparency, scale_km)
             # Place the colorbar fully below the map frame in dedicated blank space.
             asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-2.0c+h", cmap=str(cpt),
                                 frame=["xaf+lLOS velocity (mm/year)"])
@@ -1097,7 +1205,9 @@ def main() -> None:
                 timeseries_figure = pygmt.Figure()
                 plot_zoom_timeseries(
                     timeseries_figure, zoom_dates,
-                    zoom_deformation_series, zoom_stable_series
+                    zoom_deformation_series, zoom_stable_series,
+                    asf_dates if len(asf_series) else None,
+                    asf_series if len(asf_series) else None,
                 )
                 timeseries_figure.savefig(timeseries_output, dpi=300)
     print(f"Wrote {asf_map_output}")

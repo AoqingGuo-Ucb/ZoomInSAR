@@ -143,9 +143,12 @@ your Earthdata account does not appear in the plotting command.
 
 For a scientifically comparable velocity, use the automatic-overlap mode. It
 reads ZoomInSAR's `dates.json`, searches the OPERA DISP catalogue over the map
-footprint and date overlap, automatically selects the compatible orbit/direction
+footprint and date overlap, automatically selects one compatible orbit/direction/**frame**
 group with the best date coverage, downloads that displacement stack, and fits
-an ASF velocity over exactly that overlap. It saves
+an ASF velocity over exactly that overlap. Because OPERA periodically changes
+the displacement reference acquisition, the script first connects its
+reference-date groups into one relative time series; it does not regress raw
+layers with different reference dates together. It saves
 `asf_overlap_manifest.json` beside the downloads for traceability.
 
 ```bash
@@ -164,7 +167,9 @@ If you already know the correct ASF track, optionally add
 Set `--asf-flight-direction` to the same ascending/descending direction as the
 ZoomInSAR input. In automatic mode the script derives **both** ASF and
 ZoomInSAR velocity from the exact ASF overlap dates, so their temporal periods
-are matched. When a direction is specified, downloads are placed in its own
+are matched. The yellow star in both maps is the same ZoomInSAR representative
+point with valid ASF observations; panel (c) compares the two series at that
+same point. When a direction is specified, downloads are placed in its own
 folder, for example `ASF_overlap_downloads/descending`, so older ascending
 files are not reused.
 
@@ -185,6 +190,26 @@ output location or base filename.
 If an ASF connection drops during a large NetCDF download, rerun the same
 command. The script reuses readable completed files, removes only the incomplete
 ASF file, and retries each failed download three times automatically.
+
+### Check the SWEETS LOS sign before interpreting colours
+
+ASF/OPERA defines positive LOS displacement as motion **toward** the satellite.
+SWEETS wrapped phase can use the opposite convention. The pipeline exposes the
+conversion as `--timeseries-phase-sign` (default `1`). To test the opposite
+convention without repeating crop, filtering, unwrapping, or detrending, rerun
+only the time-series stage:
+
+```bash
+python3 run_insar_pipeline.py \
+  --dataset Chiquita \
+  --output-root ~/Bhaltos/AoqingShare/CA_Landfill/Chiquita/ZoomInSAR_Results \
+  --skip-cropper --skip-filtering --skip-unwrapping --skip-detrending \
+  --timeseries-phase-sign -1
+```
+
+This replaces the time-series results in that output folder. Keep a copy first
+if needed, then rerun the automatic comparison. Select the sign using the
+matched-track, matched-period point series—not by merely reversing a colourbar.
 
 To create map panels (a) and (b) from only one named ASF product, use the
 single-granule mode below. A single `*.unw.nc` is **not** a multi-year velocity
