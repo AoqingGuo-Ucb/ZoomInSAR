@@ -613,11 +613,11 @@ def pixel_center(target: GridReference, row: int, col: int) -> tuple[float, floa
 def interactive_select_two_points(
     args: argparse.Namespace, target: GridReference
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Interactively inspect and confirm deformation and reference points.
+    """Interactively inspect and confirm anomalous-change and normal-subsidence points.
 
     Stage 1: left-click as many candidates as desired, then press Enter to
-    confirm the deformation point.  Stage 2: continue testing candidates and
-    press Enter again to confirm the no-deformation/reference point.  Escape
+    confirm the anomalous-change point.  Stage 2: continue testing candidates and
+    press Enter again to confirm the normal-subsidence point.  Escape
     cancels the selector.  The time-series panel updates after every click.
     """
     try:
@@ -653,11 +653,11 @@ def interactive_select_two_points(
 
     def update_instructions() -> None:
         if state["stage"] == "deformation":
-            map_ax.set_title("1/2: Test deformation points; Enter = confirm")
-            ts_ax.set_title("Deformation-point candidate")
+            map_ax.set_title("1/2: Test anomalous-change points; Enter = confirm")
+            ts_ax.set_title("Anomalous-change-point candidate")
         else:
-            map_ax.set_title("2/2: Test reference points; Enter = confirm")
-            ts_ax.set_title("No-deformation/reference candidate")
+            map_ax.set_title("2/2: Test normal-subsidence points; Enter = confirm")
+            ts_ax.set_title("Normal-subsidence-point candidate")
 
     update_instructions()
 
@@ -692,7 +692,7 @@ def interactive_select_two_points(
         ts_ax.clear()
         ts_ax.plot(dates, values, "o-", markersize=3, linewidth=1.2)
         ts_ax.axhline(0, color="0.65", linewidth=0.8)
-        role = "Deformation" if state["stage"] == "deformation" else "Reference"
+        role = "Anomalous-change" if state["stage"] == "deformation" else "Normal subsidence"
         ts_ax.set_title(f"{role} candidate: {point[0]:.5f}, {point[1]:.5f}")
         ts_ax.set_xlabel("Time (YYYY)")
         ts_ax.set_ylabel("Relative LOS displacement (m)")
@@ -713,22 +713,22 @@ def interactive_select_two_points(
                 deformation_artist = map_ax.scatter(
                     [point[0]], [point[1]], marker="*", s=180, c="yellow",
                     edgecolors="black", linewidths=0.9, zorder=6,
-                    label="Confirmed deformation point"
+                    label="Anomalous-change point"
                 )
                 state["stage"] = "reference"
                 state["point"] = None
                 update_instructions()
                 ts_ax.clear()
-                ts_ax.set_title("Click candidates for the no-deformation/reference point")
+                ts_ax.set_title("Click candidates for the normal-subsidence point")
                 ts_ax.set_xlabel("Time (YYYY)")
                 ts_ax.set_ylabel("Relative LOS displacement (m)")
                 ts_ax.grid(alpha=0.25)
                 fig.canvas.draw_idle()
-                print("Deformation point confirmed. Now choose the no-deformation/reference point; "
+                print("Anomalous-change point confirmed. Now choose the normal-subsidence point; "
                       "press Enter a second time to confirm it.")
             else:
                 state["reference"] = state["point"]
-                print("Reference point confirmed. Both selections are complete.")
+                print("Normal-subsidence point confirmed. Both selections are complete.")
                 plt.close(fig)
         elif event.key == "escape":
             plt.close(fig)
@@ -740,8 +740,8 @@ def interactive_select_two_points(
 
     if state["deformation"] is None or state["reference"] is None:
         raise ValueError(
-            "Both points must be confirmed: click/inspect a deformation point and press Enter, "
-            "then click/inspect a no-deformation/reference point and press Enter again."
+            "Both points must be confirmed: click/inspect an anomalous-change point and press Enter, "
+            "then click/inspect a normal-subsidence point and press Enter again."
         )
     return state["deformation"], state["reference"]  # type: ignore[return-value]
 
@@ -1011,10 +1011,17 @@ def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, regio
     fig.grdimage(grid=velocity, cmap=cpt, transparency=transparency)
     if points:
         for longitude, latitude, role in points:
-            if role == "Deformation":
-                fig.plot(x=longitude, y=latitude, style="a0.30c", fill="yellow", pen="0.75p,black")
+            if role == "Anomalous":
+                fig.plot(
+                    x=longitude, y=latitude, style="a0.30c", fill="yellow",
+                    pen="0.75p,black", label="Anomalous-change point",
+                )
             else:
-                fig.plot(x=longitude, y=latitude, style="c0.25c", fill="white", pen="0.75p,black")
+                fig.plot(
+                    x=longitude, y=latitude, style="c0.25c", fill="white",
+                    pen="0.75p,black", label="Normal subsidence point",
+                )
+        fig.legend(position="jBL+o0.18c", box="+gwhite@80+p0.25p")
     # Put the scale bar in the upper-left blank map area, away from the colorbar.
     fig.basemap(map_scale=f"jTL+o0.25c/0.75c+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
 
@@ -1038,15 +1045,15 @@ def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
     fig.basemap(
         region=region, projection="X25c/7c",
         frame=["pxa1Yf3o+lTime (YYYY)", "ya+lRelative LOS displacement (m)",
-               "+t(c) Matched representative-point LOS displacement time series"],
+               "+t(c) ZoomInSAR representative-point LOS displacement time series"],
     )
     if asf_dates and asf_values is not None:
         fig.plot(x=asf_dates, y=asf_values, pen="1.3p,black",
                  style="c0.10c", fill="black", label="ASF/OPERA")
     fig.plot(x=zoom_dates, y=deformation_values, pen="1.3p,180/25/25",
-             style="c0.11c", fill="180/25/25", label="ZoomInSAR")
+             style="c0.11c", fill="180/25/25", label="Anomalous-change point")
     fig.plot(x=zoom_dates, y=stable_values, pen="0.9p,90/90/90",
-             style="c0.09c", fill="white", label="ZoomInSAR stable point")
+             style="c0.09c", fill="white", label="Normal subsidence point")
     fig.legend(position="jTR+o0.2c", box="+gwhite+p0.25p")
 
 def main() -> None:
@@ -1178,12 +1185,10 @@ def main() -> None:
             projection = "M13c"
             asf_figure = pygmt.Figure()
             asf_map_points = None
-            if deformation_point:
-                asf_map_points = [(*deformation_point, "Deformation")]
             plot_map(asf_figure, dem, asf_velocity, zoom.region, projection, str(cpt),
                      "(a) ASF/OPERA LOS velocity", asf_map_points, args.transparency, scale_km)
             # Place the colorbar fully below the map frame in dedicated blank space.
-            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-2.0c+h", cmap=str(cpt),
+            asf_figure.colorbar(position="JBC+w9c/0.45c+o0c/-3.0c+h", cmap=str(cpt),
                                 frame=["xaf+lLOS velocity (mm/year)"])
             asf_figure.savefig(asf_map_output, dpi=300)
 
@@ -1191,11 +1196,11 @@ def main() -> None:
             # Show both time-series locations only on the ZoomInSAR map.
             zoom_map_points = None
             if deformation_point and stable_point:
-                zoom_map_points = [(*deformation_point, "Deformation"), (*stable_point, "Stable")]
+                zoom_map_points = [(*deformation_point, "Anomalous"), (*stable_point, "Normal")]
             plot_map(zoom_figure, dem, zoom_velocity, zoom.region, projection, str(cpt),
                      "(b) ZoomInSAR LOS velocity", zoom_map_points, args.transparency, scale_km)
             # Place the colorbar fully below the map frame in dedicated blank space.
-            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-2.0c+h", cmap=str(cpt),
+            zoom_figure.colorbar(position="JBC+w9c/0.45c+o0c/-3.0c+h", cmap=str(cpt),
                                  frame=["xaf+lLOS velocity (mm/year)"])
             zoom_figure.savefig(zoom_map_output, dpi=300)
             if deformation_point and stable_point:
@@ -1213,8 +1218,8 @@ def main() -> None:
     print(f"Wrote {asf_map_output}")
     print(f"Wrote {zoom_map_output}")
     if deformation_point and stable_point:
-        print(f"ZoomInSAR deformation point: lon={deformation_point[0]:.6f}, lat={deformation_point[1]:.6f}")
-        print(f"ZoomInSAR stable point:      lon={stable_point[0]:.6f}, lat={stable_point[1]:.6f}")
+        print(f"Anomalous-change point:      lon={deformation_point[0]:.6f}, lat={deformation_point[1]:.6f}")
+        print(f"Normal subsidence point:     lon={stable_point[0]:.6f}, lat={stable_point[1]:.6f}")
         print(f"Wrote {timeseries_output}")
 
 
