@@ -551,7 +551,11 @@ def select_common_representative_point(args: argparse.Namespace, asf_stack: np.n
     Failure to find a common ASF point is non-fatal: the caller can still plot
     the ZoomInSAR-only time series.
     """
-    for point in representative_point_candidates(args):
+    try:
+        candidates = representative_point_candidates(args)
+    except (FileNotFoundError, ValueError):
+        candidates = []
+    for point in candidates:
         series = asf_series_at_point(asf_stack, target, point)
         if series is not None:
             return point, series
@@ -568,46 +572,161 @@ def pixel_center(target: GridReference, row: int, col: int) -> tuple[float, floa
     return float(x), float(y)
 
 
-def choose_zoom_deformation_and_stable_points(
+def interactive_select_deformation_point(
     args: argparse.Namespace, target: GridReference
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Choose one deforming and one stable point from the ZoomInSAR velocity map.
+) -> tuple[float, float]:
+    """Let the user inspect as many ZoomInSAR candidates as needed.
 
-    The deforming point is chosen near the 95th percentile of absolute LOS
-    velocity rather than at the single most extreme pixel, which makes the
-    selection less sensitive to isolated outliers.  The stable point is the
-    valid pixel with absolute velocity closest to zero.  An explicitly supplied
-    --point-lon/--point-lat is used as the deforming point.
+    Left-click the velocity map to update the candidate time series.  Press
+    Enter/Return to accept the current candidate.  Escape closes the selector
+    without accepting a point.
     """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as error:
+        raise RuntimeError(
+            "Interactive point selection requires matplotlib. Install it or use "
+            "--point-lon/--point-lat for a non-interactive run."
+        ) from error
+
+    west, east, south, north = target.region
+    fig, (map_ax, ts_ax) = plt.subplots(1, 2, figsize=(13, 5.5))
+    image = map_ax.imshow(
+        target.data, extent=[west, east, south, north], origin="upper",
+        cmap="RdBu_r", vmin=-args.vmax_mm_year, vmax=args.vmax_mm_year,
+        aspect="auto",
+    )
+    fig.colorbar(image, ax=map_ax, label="LOS velocity (mm/year)")
+    map_ax.set_title("Click candidates; press Enter to accept")
+    map_ax.set_xlabel("Longitude")
+    map_ax.set_ylabel("Latitude")
+    ts_ax.set_title("Candidate ZoomInSAR time series")
+    ts_ax.set_xlabel("Time (YYYY)")
+    ts_ax.set_ylabel("Relative LOS displacement (m)")
+    ts_ax.grid(alpha=0.25)
+
+    state: dict[str, object] = {"point": None, "accepted": None, "marker": None}
+    tested_x: list[float] = []
+    tested_y: list[float] = []
+    tested_artist = map_ax.scatter([], [], s=20, facecolors="none", edgecolors="0.35", label="Tested")
+
+    def on_click(event) -> None:
+        if event.inaxes is not map_ax or event.xdata is None or event.ydata is None:
+            return
+        point = (float(event.xdata), float(event.ydata))
+        try:
+            dates, values = load_zoom_timeseries(
+                args.zoom_timeseries_dir, args.zoom_data_dir, *point
+            )
+        except Exception as error:
+            print(f"Candidate could not be sampled: {error}")
+            return
+        finite = np.isfinite(values)
+        if np.count_nonzero(finite) < 2:
+            print(f"Candidate lon={point[0]:.6f}, lat={point[1]:.6f} has fewer than two valid observations.")
+            return
+        tested_x.append(point[0]); tested_y.append(point[1])
+        tested_artist.set_offsets(np.column_stack([tested_x, tested_y]))
+        if state["marker"] is not None:
+            state["marker"].remove()
+        state["marker"] = map_ax.scatter(
+            [point[0]], [point[1]], marker="*", s=180, c="yellow",
+            edgecolors="black", linewidths=0.8, zorder=5, label="Current candidate"
+        )
+        state["point"] = point
+        ts_ax.clear()
+        ts_ax.plot(dates, values, "o-", markersize=3, linewidth=1.2)
+        ts_ax.axhline(0, color="0.65", linewidth=0.8)
+        ts_ax.set_title(f"Candidate: {point[0]:.5f}, {point[1]:.5f}")
+        ts_ax.set_xlabel("Time (YYYY)")
+        ts_ax.set_ylabel("Relative LOS displacement (m)")
+        ts_ax.grid(alpha=0.25)
+        fig.canvas.draw_idle()
+        print(f"Testing deformation candidate: lon={point[0]:.6f}, lat={point[1]:.6f}. Press Enter to accept or click another point.")
+
+    def on_key(event) -> None:
+        if event.key in ("enter", "return") and state["point"] is not None:
+            state["accepted"] = state["point"]
+            plt.close(fig)
+        elif event.key == "escape":
+            plt.close(fig)
+
+    fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.tight_layout()
+    plt.show()
+    if state["accepted"] is None:
+        raise ValueError(
+            "No deformation point was accepted. Click a candidate and press Enter, "
+            "or rerun with --point-lon/--point-lat."
+        )
+    return state["accepted"]  # type: ignore[return-value]
+
+
+def choose_stable_point(
+    args: argparse.Namespace, target: GridReference, deforming: tuple[float, float]
+) -> tuple[float, float]:
+    """Automatically choose a stable point using low velocity and low time variability."""
     values = np.asarray(target.data, dtype=float)
     valid = np.isfinite(values)
     if np.count_nonzero(valid) < 2:
         raise ValueError("ZoomInSAR velocity map has fewer than two valid pixels.")
 
-    if args.point_lon is not None and args.point_lat is not None:
-        deforming = (float(args.point_lon), float(args.point_lat))
-    else:
-        abs_values = np.abs(values)
-        threshold = float(np.nanpercentile(abs_values[valid], 95.0))
-        candidates = np.where(valid & (abs_values >= threshold), abs_values, np.nan)
-        row, col = np.unravel_index(np.nanargmin(np.abs(candidates - threshold)), values.shape)
-        deforming = pixel_center(target, int(row), int(col))
-
-    stable_metric = np.where(valid, np.abs(values), np.nan)
-    stable_row, stable_col = np.unravel_index(np.nanargmin(stable_metric), values.shape)
-    stable = pixel_center(target, int(stable_row), int(stable_col))
-
-    # Avoid selecting effectively the same location for both roles.
     drow, dcol = rasterio.transform.rowcol(target.transform, *deforming)
-    if int(drow) == int(stable_row) and int(dcol) == int(stable_col):
-        flat = np.argsort(np.where(valid, np.abs(values), np.inf), axis=None)
+    # Start from the lowest-|velocity| pixels, then use temporal variability to
+    # distinguish genuinely quiet locations from pixels that merely have a near-zero trend.
+    flat = np.argsort(np.where(valid, np.abs(values), np.inf), axis=None)
+    candidates: list[tuple[float, float, float, float]] = []
+    min_sep_pixels = max(5.0, 0.05 * np.hypot(*values.shape))
+    for index in flat[: min(len(flat), 1000)]:
+        row, col = np.unravel_index(index, values.shape)
+        if not np.isfinite(values[row, col]):
+            continue
+        if np.hypot(row - drow, col - dcol) < min_sep_pixels:
+            continue
+        point = pixel_center(target, int(row), int(col))
+        try:
+            _, series = load_zoom_timeseries(args.zoom_timeseries_dir, args.zoom_data_dir, *point)
+        except Exception:
+            continue
+        finite = series[np.isfinite(series)]
+        if finite.size < 2:
+            continue
+        variability = float(np.nanstd(finite))
+        candidates.append((variability, abs(float(values[row, col])), point[0], point[1]))
+        if len(candidates) >= 80:
+            break
+    if not candidates:
+        # Conservative fallback: nearest-to-zero valid pixel distinct from deformation point.
         for index in flat:
             row, col = np.unravel_index(index, values.shape)
             if (int(row), int(col)) != (int(drow), int(dcol)):
-                stable = pixel_center(target, int(row), int(col))
-                break
-    return deforming, stable
+                return pixel_center(target, int(row), int(col))
+        raise ValueError("Could not find a distinct stable ZoomInSAR point.")
 
+    # Normalize the two criteria so neither velocity nor variability dominates by units.
+    var = np.asarray([item[0] for item in candidates])
+    vel = np.asarray([item[1] for item in candidates])
+    var_scale = max(float(np.nanpercentile(var, 90)), 1e-9)
+    vel_scale = max(float(np.nanpercentile(vel, 90)), 1e-9)
+    score = var / var_scale + vel / vel_scale
+    best = candidates[int(np.nanargmin(score))]
+    return float(best[2]), float(best[3])
+
+
+def choose_zoom_deformation_and_stable_points(
+    args: argparse.Namespace, target: GridReference
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Choose a user-reviewed deformation point and an automatic stable point."""
+    if (args.point_lon is None) != (args.point_lat is None):
+        raise ValueError("Provide both --point-lon and --point-lat.")
+    if args.point_lon is not None:
+        deforming = (float(args.point_lon), float(args.point_lat))
+        print(f"Using command-line deformation point: lon={deforming[0]:.6f}, lat={deforming[1]:.6f}")
+    else:
+        deforming = interactive_select_deformation_point(args, target)
+    stable = choose_stable_point(args, target, deforming)
+    return deforming, stable
 
 def load_shape(data_dir: Path) -> tuple[int, int]:
     metadata = data_dir / "crop_metadata.json"
@@ -761,7 +880,7 @@ def plot_map(fig: pygmt.Figure, dem: xr.DataArray, velocity: xr.DataArray, regio
             else:
                 fig.plot(x=longitude, y=latitude, style="c0.25c", fill="white", pen="0.75p,black")
     # Put the scale bar in the upper-left blank map area, away from the colorbar.
-    fig.basemap(map_scale=f"jTL+o0.25c/0.25c+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
+    fig.basemap(map_scale=f"jTL+o0.25c/0.75c+w{scale_km:g}k+f+lkm", rose="jTR+w1.2c+f2+l")
 
 
 def plot_zoom_timeseries(fig: pygmt.Figure, zoom_dates: list[datetime],
