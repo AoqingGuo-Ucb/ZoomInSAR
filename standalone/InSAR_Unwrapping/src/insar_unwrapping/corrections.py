@@ -130,7 +130,10 @@ def repair_edge_connected_cycles(
             if pixels<min_pixels or pixels>max_fraction*valid_count or not np.any(component&domain_band): continue
             stats.components_detected+=1;stats.components_tested+=1
             before,difference,_,support=_paired_boundary_measure(corrected,component,boundary_width)
-            observed=difference/TWOPI
+            observed=difference/TWOPI if np.isfinite(difference) else np.nan
+            if not np.isfinite(observed):
+                stats.rejected_low_support+=1
+                continue
             boundary_integer=int(np.rint(observed))
             # The robust trend and the local boundary must agree on direction
             # and integer magnitude; otherwise this may be atmosphere/deformation.
@@ -432,7 +435,9 @@ def repair_region_graph_cycles(
             if not np.isfinite(before):
                 continue
             stats.regions_tested += 1
-            observed_cycles = difference / TWOPI
+            observed_cycles = difference / TWOPI if np.isfinite(difference) else np.nan
+            if not np.isfinite(observed_cycles):
+                continue
             nearest_cycle = int(np.rint(observed_cycles))
             if nearest_cycle == 0 or abs(observed_cycles - nearest_cycle) > integer_tolerance_cycles:
                 continue

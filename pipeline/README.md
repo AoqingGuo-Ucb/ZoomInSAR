@@ -191,6 +191,27 @@ If an ASF connection drops during a large NetCDF download, rerun the same
 command. The script reuses readable completed files, removes only the incomplete
 ASF file, and retries each failed download three times automatically.
 
+## Locate a flood or other event and create a smaller ROI
+
+For an event such as the August 2026 flood, first complete the ZoomInSAR time
+series with acquisitions both before and after the event. Then run:
+
+```bash
+python3 scripts/locate_event_displacement.py \
+  --project-root ~/Bhaltos/AoqingShare/CA_Landfill/Langtung \
+  --dataset Langtung \
+  --event-date 2026-08-15
+```
+
+The script compares the median cumulative LOS displacement in the 45 days
+before the date against the following 60 days. It writes an event-change map,
+candidate centre coordinates, and `suggested_roi.kml` / `suggested_roi.wkt` to
+`ZoomInSAR_Results/event_20260815/`. The KML is a screening ROI with 50-pixel
+padding; inspect it against flood imagery and adjust it before rerunning the
+full pipeline. If the event date differs, replace `2026-08-15` with the best
+known flood date. The command stops clearly if there are no post-event SAR
+acquisitions yet.
+
 ### Check the SWEETS LOS sign before interpreting colours
 
 ASF/OPERA defines positive LOS displacement as motion **toward** the satellite.
