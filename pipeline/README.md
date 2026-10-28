@@ -262,6 +262,41 @@ references. In manual mode, provide a dated local ASF stack through
 See `Data/README.md`. Large research data and generated outputs are deliberately
 not part of this repository.
 
+## Browse all local ZoomInSAR projects in a web dashboard
+
+`scripts/local_dashboard_server.py` starts a private website on the Linux
+machine where the results are stored. It scans every complete
+`ZoomInSAR_Results/InSAR_Timeseries/OUTPUT/Dataset_*` result below the selected
+data root. Select a project, choose a start/end date to calculate mean LOS
+velocity for that period, and click the map to plot the nearest radar pixel's
+cumulative displacement time series. The large displacement stacks stay on the
+Linux computer; only a small map preview and the selected point series are sent
+to the browser.
+
+```bash
+cd ~/Bhaltos/AoqingShare/ZoomInSAR/pipeline
+conda activate insar
+python3 scripts/local_dashboard_server.py \
+  --data-root ~/Bhaltos/AoqingShare \
+  --port 8765
+```
+
+Open this address on the same Linux machine:
+
+```text
+http://127.0.0.1:8765
+```
+
+To open it from your own computer while the dashboard runs on the Linux server,
+create an SSH tunnel in a separate terminal:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 aogu5947@uist-int-colorado-edu
+```
+
+Then open `http://127.0.0.1:8765` in your local browser. Stop the dashboard
+with `Ctrl+C`; it is private and is not exposed to the internet.
+
 ## Compact PBLC demo
 
 `Data/ROI/Dataset_PBLC_Demo` contains a 96 x 96 pixel PBLC excerpt with three
