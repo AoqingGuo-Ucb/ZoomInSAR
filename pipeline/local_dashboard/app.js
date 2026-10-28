@@ -21,11 +21,27 @@ function initializeMap() {
   map.on("click", clickMap);
 }
 
-function overlayImage(payload) {
+function overlayImage(payload, enlargeSparsePixels = false) {
   const canvas = document.createElement("canvas"); canvas.width = payload.width; canvas.height = payload.height;
   const context = canvas.getContext("2d"); const image = context.createImageData(payload.width, payload.height);
   payload.values.forEach((value, index) => image.data.set(color(value, payload.limit_mm_year), index * 4));
-  context.putImageData(image, 0, 0); return canvas.toDataURL("image/png");
+  context.putImageData(image, 0, 0);
+  const validCount = payload.values.reduce((count, value) => count + (value === null ? 0 : 1), 0);
+  if (enlargeSparsePixels && validCount > 0 && validCount < 120000) {
+    const radius = validCount < 30000 ? 3 : 2;
+    payload.values.forEach((value, index) => {
+      if (value === null) return;
+      const [red, green, blue] = color(value, payload.limit_mm_year);
+      context.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+      context.beginPath();
+      context.arc(index % payload.width + 0.5, Math.floor(index / payload.width) + 0.5, radius, 0, 2 * Math.PI);
+      context.fill();
+      context.strokeStyle = "rgba(25, 35, 45, 0.45)";
+      context.lineWidth = 0.6;
+      context.stroke();
+    });
+  }
+  return canvas.toDataURL("image/png");
 }
 
 function drawMap(payload) {
@@ -34,7 +50,7 @@ function drawMap(payload) {
   if (overviewLayer) { map.removeLayer(overviewLayer); overviewLayer = undefined; }
   if (velocityOverlay) map.removeLayer(velocityOverlay);
   if (projectOutline) map.removeLayer(projectOutline);
-  velocityOverlay = L.imageOverlay(overlayImage(payload), bounds, { opacity: 0.84, interactive: false, className: "velocity-overlay" }).addTo(map);
+  velocityOverlay = L.imageOverlay(overlayImage(payload, true), bounds, { opacity: 0.84, interactive: false, className: "velocity-overlay" }).addTo(map);
   projectOutline = L.rectangle(bounds, { color: "#f4cd39", weight: 2, fill: false, interactive: false }).addTo(map);
   $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
   $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
