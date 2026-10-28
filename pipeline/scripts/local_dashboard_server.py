@@ -225,7 +225,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/velocity":
                 start = datetime.fromisoformat(query["start"][0]) if query.get("start", [""])[0] else None
                 end = datetime.fromisoformat(query["end"][0]) if query.get("end", [""])[0] else None
-                return self.json_response(project.map_payload(start, end))
+                resolution = int(query.get("resolution", ["360"])[0])
+                resolution = min(max(resolution, 100), 900)
+                return self.json_response(project.map_payload(start, end, maximum=resolution))
             if parsed.path == "/api/timeseries":
                 return self.json_response(project.point_payload(float(query["lon"][0]), float(query["lat"][0])))
             self.json_response({"error": "Unknown API path"}, HTTPStatus.NOT_FOUND)

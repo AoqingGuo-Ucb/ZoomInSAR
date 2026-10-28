@@ -34,7 +34,7 @@ function drawMap(payload) {
   if (overviewLayer) { map.removeLayer(overviewLayer); overviewLayer = undefined; }
   if (velocityOverlay) map.removeLayer(velocityOverlay);
   if (projectOutline) map.removeLayer(projectOutline);
-  velocityOverlay = L.imageOverlay(overlayImage(payload), bounds, { opacity: 0.72, interactive: false }).addTo(map);
+  velocityOverlay = L.imageOverlay(overlayImage(payload), bounds, { opacity: 0.84, interactive: false, className: "velocity-overlay" }).addTo(map);
   projectOutline = L.rectangle(bounds, { color: "#f4cd39", weight: 2, fill: false, interactive: false }).addTo(map);
   $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
   $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
@@ -76,7 +76,7 @@ async function loadMap() {
   if (!selected) return;
   showStatus("Calculating and mapping velocity…");
   try {
-    drawMap(await api(`/api/velocity?project=${encodeURIComponent(selected.id)}&start=${$("start").value}&end=${$("end").value}`));
+    drawMap(await api(`/api/velocity?project=${encodeURIComponent(selected.id)}&start=${$("start").value}&end=${$("end").value}&resolution=720`));
     showStatus("Velocity overlay loaded. Zoom using the map controls; click inside the project outline for a time series.");
   } catch (error) { showStatus(`Error: ${error.message}`); }
 }
