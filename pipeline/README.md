@@ -271,8 +271,10 @@ cumulative displacement time series. The full displacement stacks remain on the
 host; the browser receives only a downsampled velocity map and the selected
 point series. The dashboard opens at a California-wide satellite-image overview
 with the full-time-span velocity layers from all discoverable projects. Select a
-project to apply a date range and inspect its local result with the map controls
-or **Zoom to selected project**.
+project, or click its red overview marker, to open a synchronized two-panel
+view: ZoomInSAR LOS velocity and the unmodified optical background. The selected
+project is zoomed automatically; use the map controls or **Zoom to selected
+project** to adjust the view.
 The satellite basemap is provided by Esri World Imagery and requires browser
 access to its tile service.
 
