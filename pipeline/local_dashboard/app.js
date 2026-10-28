@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let projects = [], selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, synchronizing = false;
+let projects = [], selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false;
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
@@ -39,7 +39,6 @@ function initializeOpticalMap() {
 function enterProjectLayout() {
   $("map-layout").classList.remove("overview");
   initializeOpticalMap();
-  if (map.hasLayer(satelliteLayer)) map.removeLayer(satelliteLayer);
   requestAnimationFrame(() => { map.invalidateSize(); opticalMap.invalidateSize(); });
 }
 
@@ -88,6 +87,16 @@ function clearSelectedLayers() {
   if (velocityOverlay) { map.removeLayer(velocityOverlay); velocityOverlay = undefined; }
   if (projectOutline) { map.removeLayer(projectOutline); projectOutline = undefined; }
   if (opticalOutline && opticalMap) { opticalMap.removeLayer(opticalOutline); opticalOutline = undefined; }
+  if (pointMarker) { map.removeLayer(pointMarker); pointMarker = undefined; }
+  if (opticalPointMarker && opticalMap) { opticalMap.removeLayer(opticalPointMarker); opticalPointMarker = undefined; }
+}
+
+function showSelectedPoint(latitude, longitude) {
+  if (pointMarker) map.removeLayer(pointMarker);
+  if (opticalPointMarker && opticalMap) opticalMap.removeLayer(opticalPointMarker);
+  const icon = () => L.divIcon({ className: "series-arrow", html: "▼", iconSize: [30, 34], iconAnchor: [15, 28] });
+  pointMarker = L.marker([latitude, longitude], { icon: icon(), interactive: false }).addTo(map);
+  opticalPointMarker = L.marker([latitude, longitude], { icon: icon(), interactive: false }).addTo(opticalMap);
 }
 
 function fitProject(payload) {
@@ -162,7 +171,7 @@ async function clickMap(event) {
   const [[south, west], [north, east]] = boundsFor(currentMap), { lat, lng } = event.latlng;
   if (lng < west || lng > east || lat < south || lat > north) { showStatus("Click inside the yellow project boundary to retrieve a point time series."); return; }
   showStatus("Loading point time series…");
-  try { const series = await api(`/api/timeseries?project=${encodeURIComponent(selected.id)}&lon=${lng}&lat=${lat}`); drawChart(series); $("series-title").textContent = "Cumulative LOS displacement"; $("point").textContent = `${series.longitude.toFixed(5)}, ${series.latitude.toFixed(5)}`; showStatus(`Nearest radar pixel: row ${series.row}, column ${series.col}`); }
+  try { const series = await api(`/api/timeseries?project=${encodeURIComponent(selected.id)}&lon=${lng}&lat=${lat}`); showSelectedPoint(series.latitude, series.longitude); drawChart(series); $("series-title").textContent = "Cumulative LOS displacement"; $("point").textContent = `${series.longitude.toFixed(5)}, ${series.latitude.toFixed(5)}`; showStatus(`Nearest radar pixel: row ${series.row}, column ${series.col}`); }
   catch (error) { showStatus(`Error: ${error.message}`); }
 }
 
