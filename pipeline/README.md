@@ -310,6 +310,28 @@ ssh -N -L 8765:127.0.0.1:8765 USER@HOST
 Then open `http://127.0.0.1:8765` in the local browser. Stop the service with
 `Ctrl+C`. The dashboard is not exposed to the network by default.
 
+### Add reviewed landfill profiles
+
+The dashboard can display reviewable facility metadata from CalRecycle's public
+SWIS records. Generate coordinate-based preliminary matches while the dashboard
+is running:
+
+```bash
+python scripts/build_calrecycle_profiles.py \
+  --projects-url http://127.0.0.1:8765/api/projects
+```
+
+This writes `landfill_profiles/generated/index.json` and one JSON file per
+project. Entries within 1 km of an official SWIS coordinate are labelled
+`high`; entries farther than 2 km, or outside California, are labelled
+`review_required` or `outside_california`. Review those entries before using
+their facility identity or status in a report. Restart the dashboard after
+generating profiles so it loads the new metadata.
+
+The source templates and environmental-product catalogue are in
+`landfill_profiles/`. They keep facility claims, source URLs, access dates, and
+deformation notes separate from the InSAR processing results.
+
 ## Compact PBLC demo
 
 `Data/ROI/Dataset_PBLC_Demo` contains a 96 x 96 pixel PBLC excerpt with three

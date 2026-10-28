@@ -1,0 +1,30 @@
+{
+  "project_id": "Dataset_EXAMPLE",
+  "facility_name": "Official facility name",
+  "alternate_names": [],
+  "location": {
+    "city": "",
+    "county": "",
+    "state": "California",
+    "operator_or_controlling_agency": ""
+  },
+  "operational_status": {
+    "value": "unknown",
+    "as_of": "YYYY-MM-DD",
+    "source_url": "https://example.gov/"
+  },
+  "deformation_notes": [],
+  "sources": [
+    {
+      "title": "Source title",
+      "url": "https://example.gov/",
+      "accessed": "YYYY-MM-DD",
+      "notes": "What this source supports."
+    }
+  ],
+  "reviewed": {
+    "date": "YYYY-MM-DD",
+    "scope": "Metadata only; not a regulatory determination."
+  }
+}
+

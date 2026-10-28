@@ -178,8 +178,17 @@ def discover_projects(data_root: Path, recursive: bool = False) -> dict[str, Pro
     return projects
 
 
+def load_profiles(directory: Path) -> dict[str, dict]:
+    manifest = directory / "index.json"
+    if not manifest.is_file():
+        return {}
+    profiles = json.loads(manifest.read_text()).get("profiles", [])
+    return {profile["project_id"]: profile for profile in profiles if "project_id" in profile}
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     projects: dict[str, Project] = {}
+    profiles: dict[str, dict] = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_ROOT), **kwargs)
@@ -219,6 +228,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             if parsed.path == "/api/projects":
                 return self.json_response({"projects": [project.summary(key) for key, project in self.projects.items()]})
+            if parsed.path == "/api/profiles":
+                return self.json_response({"profiles": self.profiles})
             if parsed.path == "/api/overview":
                 return self.json_response(self.overview_payload())
             project_id = query.get("project", [""])[0]
@@ -245,14 +256,18 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--recursive", action="store_true",
                         help="Search all nested folders (slower; use only for a non-standard layout)")
+    parser.add_argument("--profiles-dir", type=Path,
+                        default=Path(__file__).resolve().parents[1] / "landfill_profiles" / "generated",
+                        help="Directory containing generated CalRecycle profile index.json")
     args = parser.parse_args()
     data_root = args.data_root.expanduser().resolve()
     print(f"Scanning {data_root} for ZoomInSAR time-series outputs...", flush=True)
     DashboardHandler.projects = discover_projects(data_root, recursive=args.recursive)
+    DashboardHandler.profiles = load_profiles(args.profiles_dir.expanduser().resolve())
     if not DashboardHandler.projects:
         raise SystemExit("No complete ZoomInSAR time-series outputs were found below --data-root")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    print(f"Found {len(DashboardHandler.projects)} project(s). Open http://127.0.0.1:{args.port}")
+    print(f"Found {len(DashboardHandler.projects)} project(s) and {len(DashboardHandler.profiles)} profile(s). Open http://127.0.0.1:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

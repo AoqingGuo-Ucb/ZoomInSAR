@@ -1,0 +1,31 @@
+{
+  "products": [
+    {
+      "id": "landsat-c2-surface-temperature",
+      "name": "Landsat Collection 2 Surface Temperature",
+      "theme": "thermal",
+      "provider": "U.S. Geological Survey",
+      "coverage": "Global, Landsat 4–9 archive",
+      "use_note": "Use quality flags and cloud screening before interpretation.",
+      "url": "https://www.usgs.gov/landsat-missions/landsat-collection-2-surface-temperature"
+    },
+    {
+      "id": "ecostress-l2g-lste",
+      "name": "ECOSTRESS Gridded Land Surface Temperature and Emissivity Instantaneous L2",
+      "theme": "thermal",
+      "provider": "NASA LP DAAC",
+      "coverage": "Global, 70 m; acquisitions are not regular at every site",
+      "use_note": "Use the cloud mask and acquisition-specific quality information.",
+      "url": "https://cmr.earthdata.nasa.gov/search/site/collections/directory/LPCLOUD/gov.nasa.eosdis"
+    },
+    {
+      "id": "smap-enhanced-l3-soil-moisture",
+      "name": "SMAP Enhanced L3 Radiometer Global Daily Soil Moisture",
+      "theme": "soil_moisture",
+      "provider": "NASA NSIDC DAAC",
+      "coverage": "Global, daily 9 km",
+      "use_note": "Use for regional moisture context, not landfill-scale spatial patterns.",
+      "url": "https://nsidc.org/data/documentation/smap-enhanced-l3-radiometer-global-daily-9-km-ease-grid-soil-moisture-version-3-user-guide"
+    }
+  ]
+}

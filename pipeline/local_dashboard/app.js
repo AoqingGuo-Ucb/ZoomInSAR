@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let projects = [], selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false;
+let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false;
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
@@ -180,6 +180,15 @@ function configureProject(id) {
   $("project").value = selected.id;
   $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1);
   $("details").innerHTML = `<h2>Project details</h2><p>${selected.shape[1]} × ${selected.shape[0]} pixels<br>${selected.dates.length} acquisitions<br>${selected.dates[0]} to ${selected.dates.at(-1)}</p>`;
+  const profile = profiles[selected.id];
+  if (!profile) {
+    $("site-profile").innerHTML = "<h2>Landfill information</h2><p>No reviewed site profile has been loaded.</p>";
+  } else {
+    const facility = profile.facility, match = profile.match;
+    const review = match.confidence === "high" ? "Coordinate match" : "Coordinate match — review before citation";
+    const source = profile.sources?.[0];
+    $("site-profile").innerHTML = `<h2>Landfill information</h2><p><strong>${facility.name || "Unresolved facility"}</strong><br>${facility.county || ""} County<br>Status: ${facility.operational_status || "unknown"}<br>Operator: ${facility.operator || "not listed"}<br>LEA: ${facility.enforcement_agency || "not listed"}<br><small>${review}; ${match.distance_km} km from project centre.</small>${source ? `<br><a href="${source.url}" target="_blank" rel="noreferrer">SWIS source</a>` : ""}</p>`;
+  }
   return true;
 }
 function selectProject(id, zoomToProject) { if (configureProject(id)) loadMap(zoomToProject); }
@@ -187,7 +196,8 @@ function selectProject(id, zoomToProject) { if (configureProject(id)) loadMap(zo
 async function initialize() {
   initializeMap();
   try {
-    projects = (await api("/api/projects")).projects;
+    const [projectResponse, profileResponse] = await Promise.all([api("/api/projects"), api("/api/profiles")]);
+    projects = projectResponse.projects; profiles = profileResponse.profiles;
     const select = $("project"); projects.forEach((project) => select.add(new Option(project.name, project.id)));
     select.onchange = () => selectProject(select.value, true);
     $("update").onclick = () => loadMap(false); $("zoom-project").onclick = zoomToProject; $("show-overview").onclick = loadOverview;
