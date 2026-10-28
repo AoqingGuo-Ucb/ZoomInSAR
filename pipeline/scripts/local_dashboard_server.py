@@ -115,9 +115,12 @@ class Project:
             raise ValueError("No valid velocity and geographic pixels for this period")
         west, south = float(np.nanmin(longitude[valid])), float(np.nanmin(latitude[valid]))
         east, north = float(np.nanmax(longitude[valid])), float(np.nanmax(latitude[valid]))
-        aspect = max((east - west) / max(north - south, 1e-9), 0.2)
-        width = maximum
-        height = max(100, min(maximum, int(round(maximum / aspect))))
+        # A map preview may be downsampled, but never upsampled. Upsampling a
+        # small result into a much larger grid creates artificial gaps between
+        # valid pixels and makes the velocity field look like sparse dots.
+        scale = min(1.0, maximum / max(self.shape))
+        height = max(1, int(round(self.shape[0] * scale)))
+        width = max(1, int(round(self.shape[1] * scale)))
         col = np.clip(((longitude[valid] - west) / max(east - west, 1e-12) * (width - 1)).astype(int), 0, width - 1)
         row = np.clip(((north - latitude[valid]) / max(north - south, 1e-12) * (height - 1)).astype(int), 0, height - 1)
         index = row * width + col
