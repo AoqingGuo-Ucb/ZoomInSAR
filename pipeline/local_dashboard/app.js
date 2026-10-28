@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let projects = [], selected, currentMap, map, velocityOverlay, projectOutline;
+let projects = [], selected, currentMap, map, velocityOverlay, projectOutline, overviewLayer;
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
@@ -31,6 +31,7 @@ function overlayImage(payload) {
 function drawMap(payload) {
   currentMap = payload;
   const [west, south, east, north] = payload.bounds, bounds = [[south, west], [north, east]];
+  if (overviewLayer) { map.removeLayer(overviewLayer); overviewLayer = undefined; }
   if (velocityOverlay) map.removeLayer(velocityOverlay);
   if (projectOutline) map.removeLayer(projectOutline);
   velocityOverlay = L.imageOverlay(overlayImage(payload), bounds, { opacity: 0.72, interactive: false }).addTo(map);
@@ -38,6 +39,25 @@ function drawMap(payload) {
   $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
   $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
   $("period").textContent = `${payload.period[0]} — ${payload.period[1]}`;
+}
+
+function drawOverview(payload) {
+  currentMap = undefined;
+  if (velocityOverlay) { map.removeLayer(velocityOverlay); velocityOverlay = undefined; }
+  if (projectOutline) { map.removeLayer(projectOutline); projectOutline = undefined; }
+  if (overviewLayer) map.removeLayer(overviewLayer);
+  overviewLayer = L.layerGroup();
+  payload.projects.forEach((project) => {
+    const [west, south, east, north] = project.bounds, bounds = [[south, west], [north, east]];
+    L.imageOverlay(overlayImage(project), bounds, { opacity: 0.72, interactive: false }).addTo(overviewLayer);
+    L.rectangle(bounds, { color: "#f4cd39", weight: 1, fill: false, interactive: false }).bindTooltip(project.name).addTo(overviewLayer);
+  });
+  overviewLayer.addTo(map);
+  $("map-title").textContent = "All California results";
+  $("period").textContent = "Full available time spans";
+  $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
+  $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
+  map.fitBounds(californiaBounds);
 }
 
 function zoomToProject() {
@@ -55,6 +75,14 @@ async function loadMap() {
   } catch (error) { showStatus(`Error: ${error.message}`); }
 }
 
+async function loadOverview() {
+  showStatus("Loading all California velocity results…");
+  try {
+    drawOverview(await api("/api/overview"));
+    showStatus("All available results are shown. Select a project to inspect its time range and point time series.");
+  } catch (error) { showStatus(`Error: ${error.message}`); }
+}
+
 function drawChart(series) {
   const valid = series.displacement_mm.map((value, index) => value === null ? null : [index, value]).filter(Boolean);
   chartCanvas.width = 900; chartCanvas.height = 260;
@@ -69,7 +97,7 @@ function drawChart(series) {
 }
 
 async function clickMap(event) {
-  if (!currentMap) return;
+  if (!currentMap) { showStatus("Select a project before requesting a point time series."); return; }
   const [west, south, east, north] = currentMap.bounds, { lat, lng } = event.latlng;
   if (lng < west || lng > east || lat < south || lat > north) { showStatus("Click inside the selected project outline to retrieve a point time series."); return; }
   showStatus("Loading point time series…");
@@ -77,10 +105,16 @@ async function clickMap(event) {
   catch (error) { showStatus(`Error: ${error.message}`); }
 }
 
-function chooseProject() {
+function configureProject() {
   selected = projects.find((project) => project.id === $("project").value); if (!selected) return;
-  $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1); $("map-title").textContent = selected.name;
+  $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1);
   $("details").innerHTML = `<h2>Project details</h2><p>${selected.shape[1]} × ${selected.shape[0]} pixels<br>${selected.dates.length} acquisitions<br>${selected.dates[0]} to ${selected.dates.at(-1)}</p>`;
+}
+
+function chooseProject() {
+  configureProject();
+  if (!selected) return;
+  $("map-title").textContent = selected.name;
   loadMap();
 }
 
@@ -90,8 +124,10 @@ async function initialize() {
     projects = (await api("/api/projects")).projects;
     const select = $("project"); projects.forEach((project) => select.add(new Option(project.name, project.id)));
     select.onchange = chooseProject; $("update").onclick = loadMap; $("zoom-project").onclick = zoomToProject;
+    $("show-overview").onclick = loadOverview;
     $("reset").onclick = () => { $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1); loadMap(); };
-    chooseProject();
+    configureProject();
+    loadOverview();
   } catch (error) { showStatus(`Could not load dashboard: ${error.message}`); }
 }
 initialize();

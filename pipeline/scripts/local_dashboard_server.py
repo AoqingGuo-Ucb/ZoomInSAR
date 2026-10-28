@@ -188,6 +188,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers(); self.wfile.write(encoded)
 
+    def overview_payload(self) -> dict:
+        """Return compact, full-time-span velocity maps for every project."""
+        maps = []
+        for key, project in self.projects.items():
+            try:
+                payload = project.map_payload(None, None, maximum=220)
+            except ValueError as error:
+                print(f"Skipping {project.dataset} in overview: {error}")
+                continue
+            payload["id"] = key
+            payload["name"] = project.dataset.removeprefix("Dataset_")
+            maps.append(payload)
+        if not maps:
+            raise ValueError("No projects have a displayable velocity map")
+        values = [abs(value) for payload in maps for value in payload["values"] if value is not None]
+        limit = max(float(np.percentile(values, 98)), 1.0) if values else 1.0
+        for payload in maps:
+            payload["limit_mm_year"] = limit
+        return {"projects": maps, "limit_mm_year": limit}
+
     def do_GET(self):  # noqa: N802
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
@@ -196,6 +216,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             if parsed.path == "/api/projects":
                 return self.json_response({"projects": [project.summary(key) for key, project in self.projects.items()]})
+            if parsed.path == "/api/overview":
+                return self.json_response(self.overview_payload())
             project_id = query.get("project", [""])[0]
             project = self.projects.get(project_id)
             if project is None:

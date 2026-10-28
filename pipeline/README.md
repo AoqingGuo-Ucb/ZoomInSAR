@@ -269,8 +269,10 @@ data root. Select a project, choose a start/end date to calculate mean LOS
 velocity for that period, and click the map to plot the nearest radar pixel's
 cumulative displacement time series. The full displacement stacks remain on the
 host; the browser receives only a downsampled velocity map and the selected
-point series. The dashboard opens at a California-wide satellite-image overview;
-use the map controls or **Zoom to selected project** to inspect a local result.
+point series. The dashboard opens at a California-wide satellite-image overview
+with the full-time-span velocity layers from all discoverable projects. Select a
+project to apply a date range and inspect its local result with the map controls
+or **Zoom to selected project**.
 The satellite basemap is provided by Esri World Imagery and requires browser
 access to its tile service.
 
