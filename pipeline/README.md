@@ -318,19 +318,21 @@ is running:
 
 ```bash
 python scripts/build_calrecycle_profiles.py \
-  --projects-url http://127.0.0.1:8765/api/projects
+  --projects-url http://127.0.0.1:8765/api/projects \
+  --output-dir /path/to/CA_Landfill/landfill_profiles
 ```
 
-This writes `landfill_profiles/generated/index.json` and one JSON file per
-project. Entries within 1 km of an official SWIS coordinate are labelled
+This writes `index.json` and one JSON file per project in the selected profile
+directory. Entries within 1 km of an official SWIS coordinate are labelled
 `high`; entries farther than 2 km, or outside California, are labelled
 `review_required` or `outside_california`. Review those entries before using
 their facility identity or status in a report. Restart the dashboard after
 generating profiles so it loads the new metadata.
 
 The source templates and environmental-product catalogue are in
-`landfill_profiles/`. They keep facility claims, source URLs, access dates, and
-deformation notes separate from the InSAR processing results.
+`landfill_profiles/` in the code repository. The generated site profiles remain
+with the data, keeping facility claims, source URLs, access dates, and
+deformation notes separate from both code and InSAR processing results.
 
 ## Compact PBLC demo
 

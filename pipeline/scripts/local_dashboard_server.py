@@ -257,17 +257,17 @@ def main() -> None:
     parser.add_argument("--recursive", action="store_true",
                         help="Search all nested folders (slower; use only for a non-standard layout)")
     parser.add_argument("--profiles-dir", type=Path,
-                        default=Path(__file__).resolve().parents[1] / "landfill_profiles" / "generated",
-                        help="Directory containing generated CalRecycle profile index.json")
+                        help="Directory containing generated CalRecycle profile index.json (default: <data-root>/landfill_profiles)")
     args = parser.parse_args()
     data_root = args.data_root.expanduser().resolve()
     print(f"Scanning {data_root} for ZoomInSAR time-series outputs...", flush=True)
+    profiles_dir = (args.profiles_dir or data_root / "landfill_profiles").expanduser().resolve()
     DashboardHandler.projects = discover_projects(data_root, recursive=args.recursive)
-    DashboardHandler.profiles = load_profiles(args.profiles_dir.expanduser().resolve())
+    DashboardHandler.profiles = load_profiles(profiles_dir)
     if not DashboardHandler.projects:
         raise SystemExit("No complete ZoomInSAR time-series outputs were found below --data-root")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
-    print(f"Found {len(DashboardHandler.projects)} project(s) and {len(DashboardHandler.profiles)} profile(s). Open http://127.0.0.1:{args.port}")
+    print(f"Found {len(DashboardHandler.projects)} project(s) and {len(DashboardHandler.profiles)} profile(s) in {profiles_dir}. Open http://127.0.0.1:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

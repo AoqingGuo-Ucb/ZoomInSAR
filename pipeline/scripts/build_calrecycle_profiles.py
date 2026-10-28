@@ -77,7 +77,8 @@ def project_records(payload: dict) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build reviewable CalRecycle SWIS dashboard profiles")
     parser.add_argument("--projects-url", default="http://127.0.0.1:8765/api/projects")
-    parser.add_argument("--output-dir", type=Path, default=Path("landfill_profiles/generated"))
+    parser.add_argument("--output-dir", type=Path, required=True,
+                        help="Output directory, normally <data-root>/landfill_profiles")
     parser.add_argument("--review-distance-km", type=float, default=2.0)
     args = parser.parse_args()
 
