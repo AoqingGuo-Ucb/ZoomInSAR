@@ -281,9 +281,10 @@ python scripts/local_dashboard_server.py \
   --port 8765
 ```
 
-`--data-root` may be any directory above one or more project folders. The
-server discovers results recursively, so a focused parent directory is preferred
-when a storage volume contains unrelated data.
+`--data-root` should contain project folders directly, each with a
+`ZoomInSAR_Results` directory. This targeted layout keeps discovery fast because
+the server does not inspect every interferogram or intermediate raster. For a
+non-standard nested layout, add `--recursive`; use it only when necessary.
 
 The service listens only on the loopback interface and is therefore private to
 the host. Open the following address in a browser running on that host:

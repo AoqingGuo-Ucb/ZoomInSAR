@@ -154,9 +154,16 @@ class Project:
         }
 
 
-def discover_projects(data_root: Path) -> dict[str, Project]:
+def discover_projects(data_root: Path, recursive: bool = False) -> dict[str, Project]:
     projects: dict[str, Project] = {}
-    for velocity in sorted(data_root.rglob("InSAR_Timeseries/OUTPUT/Dataset_*/mean_los_velocity_m_per_year.npy")):
+    relative_pattern = "ZoomInSAR_Results/InSAR_Timeseries/OUTPUT/Dataset_*/mean_los_velocity_m_per_year.npy"
+    if recursive:
+        candidates = data_root.rglob(relative_pattern)
+    else:
+        # The usual layout is <data-root>/<project>/ZoomInSAR_Results/....
+        # Targeted glob patterns avoid walking every interferogram and raster.
+        candidates = list(data_root.glob(relative_pattern)) + list(data_root.glob(f"*/{relative_pattern}"))
+    for velocity in sorted(candidates):
         result_dir = velocity.parent
         try:
             results_root = result_dir.parents[2]
@@ -209,8 +216,12 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path, required=True,
                         help="Parent folder containing projects and ZoomInSAR_Results directories")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--recursive", action="store_true",
+                        help="Search all nested folders (slower; use only for a non-standard layout)")
     args = parser.parse_args()
-    DashboardHandler.projects = discover_projects(args.data_root.expanduser().resolve())
+    data_root = args.data_root.expanduser().resolve()
+    print(f"Scanning {data_root} for ZoomInSAR time-series outputs...", flush=True)
+    DashboardHandler.projects = discover_projects(data_root, recursive=args.recursive)
     if not DashboardHandler.projects:
         raise SystemExit("No complete ZoomInSAR time-series outputs were found below --data-root")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler)
