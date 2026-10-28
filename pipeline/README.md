@@ -115,8 +115,7 @@ conda install -n insar -c conda-forge pygmt gmt rasterio xarray netcdf4 scipy as
 
 ### Set the ASF/Earthdata account once
 
-On the Linux computer that runs the script, create your private Earthdata
-credential file:
+On the host that runs the script, create a private Earthdata credential file:
 
 ```bash
 nano ~/.netrc
@@ -154,7 +153,7 @@ layers with different reference dates together. It saves
 ```bash
 python3 scripts/plot_asf_zoomin_comparison.py \
   --auto-asf-overlap \
-  --project-root ~/Bhaltos/AoqingShare/CA_Landfill/Chiquita \
+  --project-root /path/to/project \
   --asf-flight-direction descending
 ```
 
@@ -198,19 +197,18 @@ series with acquisitions both before and after the event. Then run:
 
 ```bash
 python3 scripts/locate_event_displacement.py \
-  --project-root ~/Bhaltos/AoqingShare/CA_Landfill/Langtung \
-  --dataset Langtung \
-  --event-date 2026-08-15
+  --project-root /path/to/project \
+  --dataset DATASET_NAME \
+  --event-date YYYY-MM-DD
 ```
 
 The script compares the median cumulative LOS displacement in the 45 days
 before the date against the following 60 days. It writes an event-change map,
 candidate centre coordinates, and `suggested_roi.kml` / `suggested_roi.wkt` to
-`ZoomInSAR_Results/event_20260815/`. The KML is a screening ROI with 50-pixel
-padding; inspect it against flood imagery and adjust it before rerunning the
-full pipeline. If the event date differs, replace `2026-08-15` with the best
-known flood date. The command stops clearly if there are no post-event SAR
-acquisitions yet.
+`ZoomInSAR_Results/event_YYYYMMDD/`. The KML is a screening ROI with 50-pixel
+padding; inspect it against event imagery and adjust it before rerunning the
+full pipeline. The command stops clearly if there are no post-event SAR
+acquisitions.
 
 ### Check the SWEETS LOS sign before interpreting colours
 
@@ -222,8 +220,8 @@ only the time-series stage:
 
 ```bash
 python3 run_insar_pipeline.py \
-  --dataset Chiquita \
-  --output-root ~/Bhaltos/AoqingShare/CA_Landfill/Chiquita/ZoomInSAR_Results \
+  --dataset DATASET_NAME \
+  --output-root /path/to/ZoomInSAR_Results \
   --skip-cropper --skip-filtering --skip-unwrapping --skip-detrending \
   --timeseries-phase-sign -1
 ```
@@ -264,38 +262,45 @@ not part of this repository.
 
 ## Browse all local ZoomInSAR projects in a web dashboard
 
-`scripts/local_dashboard_server.py` starts a private website on the Linux
-machine where the results are stored. It scans every complete
+`scripts/local_dashboard_server.py` starts a private dashboard on the host
+where the results are stored. It scans every complete
 `ZoomInSAR_Results/InSAR_Timeseries/OUTPUT/Dataset_*` result below the selected
 data root. Select a project, choose a start/end date to calculate mean LOS
 velocity for that period, and click the map to plot the nearest radar pixel's
-cumulative displacement time series. The large displacement stacks stay on the
-Linux computer; only a small map preview and the selected point series are sent
-to the browser.
+cumulative displacement time series. The full displacement stacks remain on the
+host; the browser receives only a downsampled velocity map and the selected
+point series.
+
+Start the service from the `pipeline` directory after activating the ZoomInSAR
+environment:
 
 ```bash
-cd ~/Bhaltos/AoqingShare/ZoomInSAR/pipeline
 conda activate insar
-python3 scripts/local_dashboard_server.py \
-  --data-root ~/Bhaltos/AoqingShare \
+python scripts/local_dashboard_server.py \
+  --data-root /path/to/results-parent \
   --port 8765
 ```
 
-Open this address on the same Linux machine:
+`--data-root` may be any directory above one or more project folders. The
+server discovers results recursively, so a focused parent directory is preferred
+when a storage volume contains unrelated data.
+
+The service listens only on the loopback interface and is therefore private to
+the host. Open the following address in a browser running on that host:
 
 ```text
 http://127.0.0.1:8765
 ```
 
-To open it from your own computer while the dashboard runs on the Linux server,
-create an SSH tunnel in a separate terminal:
+To access the dashboard from a different computer, create an SSH local port
+forwarding connection appropriate to your environment:
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 aogu5947@uist-int-colorado-edu
+ssh -N -L 8765:127.0.0.1:8765 USER@HOST
 ```
 
-Then open `http://127.0.0.1:8765` in your local browser. Stop the dashboard
-with `Ctrl+C`; it is private and is not exposed to the internet.
+Then open `http://127.0.0.1:8765` in the local browser. Stop the service with
+`Ctrl+C`. The dashboard is not exposed to the network by default.
 
 ## Compact PBLC demo
 
