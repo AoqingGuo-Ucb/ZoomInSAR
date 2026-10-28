@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ZoomInSAR California Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -14,14 +15,16 @@
         <div class="date-row"><label>Start<input id="start" type="date" /></label><label>End<input id="end" type="date" /></label></div>
         <button id="update">Update velocity period</button>
         <button class="secondary" id="reset">Use full time span</button>
+        <button class="secondary" id="zoom-project">Zoom to selected project</button>
         <section><h2>How to use</h2><p>Select a project and date range. Click the velocity map to inspect the nearest valid InSAR pixel and its cumulative LOS displacement.</p></section>
         <section id="details"><h2>Project details</h2><p>Select a project.</p></section>
       </aside>
       <section class="content">
-        <div class="panel"><div class="panel-head"><div><span class="eyebrow">MEAN LOS VELOCITY</span><h2 id="map-title">Loading…</h2></div><span id="period" class="pill"></span></div><div class="map-wrap"><canvas id="map" aria-label="Mean LOS velocity map"></canvas><div id="map-labels"></div></div><div class="legend"><span>-<span id="limit-left"></span></span><div></div><span>+<span id="limit-right"></span> mm/year</span></div></div>
+        <div class="panel"><div class="panel-head"><div><span class="eyebrow">MEAN LOS VELOCITY</span><h2 id="map-title">California overview</h2></div><span id="period" class="pill">Select a project</span></div><div id="map" class="map-wrap" aria-label="Satellite basemap with mean LOS velocity overlay"></div><div class="legend"><span>-<span id="limit-left"></span></span><div></div><span>+<span id="limit-right"></span> mm/year</span></div></div>
         <div class="panel"><div class="panel-head"><div><span class="eyebrow">SELECTED LOCATION</span><h2 id="series-title">Click the velocity map</h2></div><span id="point" class="pill"></span></div><canvas id="chart" aria-label="Cumulative displacement time series"></canvas><p id="status" class="status">Loading projects…</p></div>
       </section>
     </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -269,7 +269,10 @@ data root. Select a project, choose a start/end date to calculate mean LOS
 velocity for that period, and click the map to plot the nearest radar pixel's
 cumulative displacement time series. The full displacement stacks remain on the
 host; the browser receives only a downsampled velocity map and the selected
-point series.
+point series. The dashboard opens at a California-wide satellite-image overview;
+use the map controls or **Zoom to selected project** to inspect a local result.
+The satellite basemap is provided by Esri World Imagery and requires browser
+access to its tile service.
 
 Start the service from the `pipeline` directory after activating the ZoomInSAR
 environment:
