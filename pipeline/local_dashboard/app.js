@@ -51,6 +51,12 @@ function drawOverview(payload) {
     const [west, south, east, north] = project.bounds, bounds = [[south, west], [north, east]];
     L.imageOverlay(overlayImage(project), bounds, { opacity: 0.72, interactive: false }).addTo(overviewLayer);
     L.rectangle(bounds, { color: "#f4cd39", weight: 1, fill: false, interactive: false }).bindTooltip(project.name).addTo(overviewLayer);
+    L.circleMarker([(south + north) / 2, (west + east) / 2], {
+      radius: 11, color: "#ffffff", weight: 3, fillColor: "#e22f3b", fillOpacity: 0.98,
+    }).bindTooltip(project.name, { direction: "top", offset: [0, -10] }).on("click", () => {
+      $("project").value = project.id;
+      chooseProject();
+    }).addTo(overviewLayer);
   });
   overviewLayer.addTo(map);
   $("map-title").textContent = "All California results";
