@@ -205,7 +205,7 @@ async function loadPointTimeSeries(longitude, latitude) {
   selectedPoint = { latitude: series.latitude, longitude: series.longitude };
   showSelectedPoint(series.latitude, series.longitude);
   drawChart(series);
-  $("series-title").textContent = "Cumulative LOS displacement";
+  $("series-title").textContent = `Cumulative LOS displacement: ${series.dates[0]} — ${series.dates.at(-1)}`;
   $("point").textContent = `${series.longitude.toFixed(5)}, ${series.latitude.toFixed(5)}`;
   return series;
 }
