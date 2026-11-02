@@ -126,13 +126,21 @@ def main() -> None:
     parser.add_argument("--pair", help="Reprocess one YYYYMMDD-YYYYMMDD pair through detrending")
     parser.add_argument("--max-baseline-days", type=int, default=12)
     parser.add_argument(
+        "--timeseries-wavelength",
+        type=float,
+        help=(
+            "Radar wavelength in metres for phase-to-LOS conversion. Defaults to "
+            "0.238 m for --source sweets (the configured NISAR L-band workflow) "
+            "and 0.056 m for GAMMA/Sentinel-1 input."
+        ),
+    )
+    parser.add_argument(
         "--timeseries-phase-sign",
         type=float,
         choices=(-1.0, 1.0),
-        default=1.0,
         help=(
-            "LOS sign applied when converting unwrapped phase to displacement (default: 1). "
-            "Use -1 only when validating a SWEETS result against a same-track external product."
+            "LOS sign applied when converting unwrapped phase to displacement. Defaults to "
+            "-1 for the configured SWEETS/NISAR workflow and +1 for GAMMA/Sentinel-1 input."
         ),
     )
     parser.add_argument(
@@ -295,6 +303,16 @@ def main() -> None:
     parser.add_argument("--skip-timeseries", action="store_true")
     args = parser.parse_args()
 
+    # SWEETS is used here for NISAR GSLC-derived interferograms. Keep legacy
+    # GAMMA/Sentinel-1 values unchanged, while allowing explicit overrides for
+    # a different SWEETS sensor or independently validated phase convention.
+    if args.timeseries_wavelength is None:
+        args.timeseries_wavelength = 0.238 if args.source == "sweets" else 0.056
+    if args.timeseries_phase_sign is None:
+        args.timeseries_phase_sign = -1.0 if args.source == "sweets" else 1.0
+    if args.timeseries_wavelength <= 0:
+        parser.error("--timeseries-wavelength must be positive")
+
     output_root = Path(args.output_root).expanduser().resolve() if args.output_root else ROOT
     data_root = output_root / "Data"
     crop_dataset = dataset_name(args.dataset)
@@ -417,6 +435,7 @@ def main() -> None:
                     "--unwrapping-root", str(unwrapping_output),
                     "--output-dir", str(preliminary_output),
                     "--max-baseline-days", str(args.max_baseline_days),
+                    "--wavelength", str(args.timeseries_wavelength),
                     "--phase-sign", str(args.timeseries_phase_sign),
                     *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                     *dataset_args,
@@ -501,6 +520,7 @@ def main() -> None:
                 "--detrending-root", str(detrending_output),
                 "--output-dir", str(timeseries_output),
                 "--max-baseline-days", str(args.max_baseline_days),
+                "--wavelength", str(args.timeseries_wavelength),
                 "--phase-sign", str(args.timeseries_phase_sign),
                 *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                 *dataset_args,

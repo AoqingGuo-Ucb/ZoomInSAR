@@ -210,19 +210,26 @@ padding; inspect it against event imagery and adjust it before rerunning the
 full pipeline. The command stops clearly if there are no post-event SAR
 acquisitions.
 
-### Check the SWEETS LOS sign before interpreting colours
+### NISAR SWEETS LOS conversion
 
-ASF/OPERA defines positive LOS displacement as motion **toward** the satellite.
-SWEETS wrapped phase can use the opposite convention. The pipeline exposes the
-conversion as `--timeseries-phase-sign` (default `1`). To test the opposite
-convention without repeating crop, filtering, unwrapping, or detrending, rerun
-only the time-series stage:
+For `--source sweets`, this pipeline is configured for the NISAR L-band GSLC
+workflow: it uses a wavelength of `0.238 m` and `--timeseries-phase-sign -1`
+by default. These settings are passed to both the preliminary and final
+time-series inversions and recorded in `timeseries_summary.json`.
+
+The legacy GAMMA/Sentinel-1 workflow remains at `0.056 m` and phase sign `+1`.
+For a non-NISAR SWEETS input, explicitly override both values after validating
+its product convention. ASF/OPERA defines positive LOS displacement as motion
+**toward** the satellite; SWEETS wrapped phase can use the opposite convention.
+To test another sign without repeating crop, filtering, unwrapping, or
+detrending, rerun only the time-series stage:
 
 ```bash
 python3 run_insar_pipeline.py \
   --dataset DATASET_NAME \
   --output-root /path/to/ZoomInSAR_Results \
   --skip-cropper --skip-filtering --skip-unwrapping --skip-detrending \
+  --timeseries-wavelength 0.238 \
   --timeseries-phase-sign -1
 ```
 
