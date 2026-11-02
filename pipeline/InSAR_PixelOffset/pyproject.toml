@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "NISAR GSLC pixel-offset tracking for ZoomInSAR"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy>=1.23", "scipy>=1.9", "h5py>=3.8", "tqdm>=4.65"]
+dependencies = ["numpy>=1.23", "scipy>=1.9", "h5py>=3.8", "matplotlib>=3.6", "tqdm>=4.65"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]

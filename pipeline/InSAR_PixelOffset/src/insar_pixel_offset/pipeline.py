@@ -11,6 +11,7 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from .gslc import GslcScene, coordinate_steps, discover_scenes, locate_complex_dataset
+from .plots import plot_pair, plot_summary
 from .tracking import grid_centers, normalized_offset
 
 
@@ -56,6 +57,7 @@ def run_pixel_offset(
     pairs = adjacent_pairs(scenes, config.max_baseline_days)
     output = Path(output_dir) / (dataset if dataset.startswith("Dataset_") else f"Dataset_{dataset}")
     output.mkdir(parents=True, exist_ok=True)
+    figures = output / "figures"
 
     all_x, all_y, all_corr, pair_records = [], [], [], []
     rows = cols = None
@@ -80,22 +82,35 @@ def run_pixel_offset(
                 if np.isfinite(peak) and peak >= config.min_correlation:
                     y_offset[iy, ix], x_offset[iy, ix], correlation[iy, ix] = dy, dx, peak
         all_x.append(x_offset); all_y.append(y_offset); all_corr.append(correlation)
-        pair_records.append({
+        record = {
             "reference_date": first.date.strftime("%Y-%m-%d"),
             "secondary_date": second.date.strftime("%Y-%m-%d"),
             "baseline_days": (second.date - first.date).days,
             "reference_file": str(first.path), "secondary_file": str(second.path),
             "valid_offsets": int(np.count_nonzero(np.isfinite(correlation))),
-        })
+        }
+        pair_records.append(record)
+        x_plot = x_offset * pair_x_step if pair_x_step is not None else x_offset
+        y_plot = y_offset * pair_y_step if pair_y_step is not None else y_offset
+        plot_pair(
+            figures / f"{first.date:%Y%m%d}_{second.date:%Y%m%d}_pixel_offset.png",
+            f"{first.date:%Y-%m-%d} to {second.date:%Y-%m-%d}",
+            x_plot, y_plot, correlation,
+            "m" if pair_x_step is not None and pair_y_step is not None else "pixels",
+        )
 
-    np.save(output / "x_offset_pixels.npy", np.stack(all_x))
-    np.save(output / "y_offset_pixels.npy", np.stack(all_y))
-    np.save(output / "correlation.npy", np.stack(all_corr))
+    x_stack, y_stack, correlation_stack = np.stack(all_x), np.stack(all_y), np.stack(all_corr)
+    np.save(output / "x_offset_pixels.npy", x_stack)
+    np.save(output / "y_offset_pixels.npy", y_stack)
+    np.save(output / "correlation.npy", correlation_stack)
     np.save(output / "grid_row_indices.npy", rows)
     np.save(output / "grid_col_indices.npy", cols)
     if x_step is not None and y_step is not None:
-        np.save(output / "x_offset_m.npy", np.stack(all_x) * x_step)
-        np.save(output / "y_offset_m.npy", np.stack(all_y) * y_step)
+        x_stack, y_stack = x_stack * x_step, y_stack * y_step
+        np.save(output / "x_offset_m.npy", x_stack)
+        np.save(output / "y_offset_m.npy", y_stack)
+    plot_summary(figures / "pixel_offset_summary.png", pair_records, x_stack, y_stack,
+                 correlation_stack, "m" if x_step is not None and y_step is not None else "pixels")
     (output / "pair_dates.json").write_text(json.dumps(pair_records, indent=2), encoding="utf-8")
     summary = {
         "gslc_directory": str(Path(gslc_dir).expanduser().resolve()),

@@ -15,6 +15,8 @@ For each accepted adjacent GSLC pair, the output contains:
 - `x_offset_m.npy` and `y_offset_m.npy` when GSLC coordinate spacing is available;
 - `correlation.npy` — peak normalized cross-correlation;
 - `pair_dates.json` and `run_summary.json` — provenance and processing settings.
+- `figures/YYYYMMDD_YYYYMMDD_pixel_offset.png` — x/y offset and correlation maps for each pair;
+- `figures/pixel_offset_summary.png` — median offsets, correlation, and valid-offset count through time.
 
 The x/y offsets are map-grid east/west and north/south offsets, respectively;
 they are not radar range/azimuth offsets because input GSLCs are geocoded.
