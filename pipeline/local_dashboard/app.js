@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false;
+let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false, selectedPoint;
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
@@ -83,12 +83,14 @@ function makeVelocityImage(payload, drawDots = false) {
   return canvas.toDataURL("image/png");
 }
 
-function clearSelectedLayers() {
+function clearSelectedLayers(keepSelectedPoint = false) {
   if (velocityOverlay) { map.removeLayer(velocityOverlay); velocityOverlay = undefined; }
   if (projectOutline) { map.removeLayer(projectOutline); projectOutline = undefined; }
   if (opticalOutline && opticalMap) { opticalMap.removeLayer(opticalOutline); opticalOutline = undefined; }
-  if (pointMarker) { map.removeLayer(pointMarker); pointMarker = undefined; }
-  if (opticalPointMarker && opticalMap) { opticalMap.removeLayer(opticalPointMarker); opticalPointMarker = undefined; }
+  if (!keepSelectedPoint) {
+    if (pointMarker) { map.removeLayer(pointMarker); pointMarker = undefined; }
+    if (opticalPointMarker && opticalMap) { opticalMap.removeLayer(opticalPointMarker); opticalPointMarker = undefined; }
+  }
 }
 
 function showSelectedPoint(latitude, longitude) {
@@ -109,7 +111,7 @@ function drawMap(payload, zoomToProject) {
   currentMap = payload;
   enterProjectLayout();
   if (overviewLayer) { map.removeLayer(overviewLayer); overviewLayer = undefined; }
-  clearSelectedLayers();
+  clearSelectedLayers(Boolean(selectedPoint));
   const bounds = boundsFor(payload);
   velocityOverlay = L.imageOverlay(makeVelocityImage(payload, true), bounds, { opacity: 0.90, interactive: false, className: "velocity-overlay" }).addTo(map);
   projectOutline = L.rectangle(bounds, { color: "#f4cd39", weight: 2, fill: false, interactive: false }).addTo(map);
@@ -118,6 +120,7 @@ function drawMap(payload, zoomToProject) {
   $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
   $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
   $("period").textContent = `${payload.period[0]} — ${payload.period[1]}`;
+  if (selectedPoint) showSelectedPoint(selectedPoint.latitude, selectedPoint.longitude);
   if (zoomToProject) requestAnimationFrame(() => fitProject(payload));
 }
 
@@ -144,7 +147,15 @@ function zoomToProject() { if (currentMap) fitProject(currentMap); }
 async function loadMap(zoomToProject = false) {
   if (!selected) return;
   showStatus("Calculating and mapping velocity…");
-  try { drawMap(await api(`/api/velocity?project=${encodeURIComponent(selected.id)}&start=${$("start").value}&end=${$("end").value}&resolution=720`), zoomToProject); showStatus("Velocity and optical maps are synchronized. Click either map inside the yellow boundary for a time series."); }
+  try {
+    drawMap(await api(`/api/velocity?project=${encodeURIComponent(selected.id)}&start=${$("start").value}&end=${$("end").value}&resolution=720`), zoomToProject);
+    if (selectedPoint) {
+      await loadPointTimeSeries(selectedPoint.longitude, selectedPoint.latitude);
+      showStatus("Velocity and the selected point time series were updated for the chosen period.");
+    } else {
+      showStatus("Velocity and optical maps are synchronized. Click either map inside the yellow boundary for a time series.");
+    }
+  }
   catch (error) { showStatus(`Error: ${error.message}`); }
 }
 async function loadOverview() {
@@ -166,16 +177,32 @@ function drawChart(series) {
   context.fillStyle = "#60717e"; context.font = "12px system-ui"; context.fillText(series.dates[0], pad, height - 12); context.fillText(series.dates.at(-1), width - pad - 78, height - 12); context.fillText("Cumulative LOS displacement (mm)", pad, 16);
 }
 
+async function loadPointTimeSeries(longitude, latitude) {
+  const series = await api(`/api/timeseries?project=${encodeURIComponent(selected.id)}&lon=${longitude}&lat=${latitude}&start=${$("start").value}&end=${$("end").value}`);
+  selectedPoint = { latitude: series.latitude, longitude: series.longitude };
+  showSelectedPoint(series.latitude, series.longitude);
+  drawChart(series);
+  $("series-title").textContent = "Cumulative LOS displacement";
+  $("point").textContent = `${series.longitude.toFixed(5)}, ${series.latitude.toFixed(5)}`;
+  return series;
+}
+
 async function clickMap(event) {
   if (!currentMap) { showStatus("Click a red project marker or choose a project before requesting a point time series."); return; }
   const [[south, west], [north, east]] = boundsFor(currentMap), { lat, lng } = event.latlng;
   if (lng < west || lng > east || lat < south || lat > north) { showStatus("Click inside the yellow project boundary to retrieve a point time series."); return; }
   showStatus("Loading point time series…");
-  try { const series = await api(`/api/timeseries?project=${encodeURIComponent(selected.id)}&lon=${lng}&lat=${lat}`); showSelectedPoint(series.latitude, series.longitude); drawChart(series); $("series-title").textContent = "Cumulative LOS displacement"; $("point").textContent = `${series.longitude.toFixed(5)}, ${series.latitude.toFixed(5)}`; showStatus(`Nearest radar pixel: row ${series.row}, column ${series.col}`); }
+  try { const series = await loadPointTimeSeries(lng, lat); showStatus(`Nearest radar pixel: row ${series.row}, column ${series.col}`); }
   catch (error) { showStatus(`Error: ${error.message}`); }
 }
 
 function configureProject(id) {
+  if (selected?.id !== id) {
+    selectedPoint = undefined;
+    chartCanvas.getContext("2d").clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+    $("series-title").textContent = "Click the velocity map";
+    $("point").textContent = "";
+  }
   selected = projects.find((project) => project.id === id); if (!selected) return false;
   $("project").value = selected.id;
   $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1);

@@ -140,7 +140,13 @@ class Project:
             ],
         }
 
-    def point_payload(self, longitude_value: float, latitude_value: float) -> dict:
+    def point_payload(
+        self,
+        longitude_value: float,
+        latitude_value: float,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict:
         longitude, latitude = self.longitude_latitude()
         valid = valid_geo(longitude, latitude)
         if not np.any(valid):
@@ -148,11 +154,22 @@ class Project:
         distance = np.where(valid, (longitude - longitude_value) ** 2 + (latitude - latitude_value) ** 2, np.inf)
         row, col = np.unravel_index(np.argmin(distance), self.shape)
         stack = np.load(self.stack_path, mmap_mode="r")
-        series = np.asarray(stack[:, row, col], dtype=float) * 1000.0
+        selected = [
+            index for index, date in enumerate(self.dates)
+            if (start is None or date >= start) and (end is None or date <= end)
+        ]
+        if not selected:
+            raise ValueError("The chosen period contains no acquisitions")
+        series = np.asarray(stack[selected, row, col], dtype=float) * 1000.0
+        # A selected time window should read as cumulative displacement within
+        # that window, so reference its first finite observation to zero.
+        finite = np.flatnonzero(np.isfinite(series))
+        if finite.size:
+            series = series - series[finite[0]]
         return {
             "longitude": float(longitude[row, col]), "latitude": float(latitude[row, col]),
             "row": int(row), "col": int(col),
-            "dates": [date.strftime("%Y-%m-%d") for date in self.dates],
+            "dates": [self.dates[index].strftime("%Y-%m-%d") for index in selected],
             "displacement_mm": [None if not math.isfinite(value) else round(float(value), 3) for value in series],
         }
 
@@ -243,7 +260,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 resolution = min(max(resolution, 100), 900)
                 return self.json_response(project.map_payload(start, end, maximum=resolution))
             if parsed.path == "/api/timeseries":
-                return self.json_response(project.point_payload(float(query["lon"][0]), float(query["lat"][0])))
+                start = datetime.fromisoformat(query["start"][0]) if query.get("start", [""])[0] else None
+                end = datetime.fromisoformat(query["end"][0]) if query.get("end", [""])[0] else None
+                return self.json_response(project.point_payload(
+                    float(query["lon"][0]), float(query["lat"][0]), start, end,
+                ))
             self.json_response({"error": "Unknown API path"}, HTTPStatus.NOT_FOUND)
         except (KeyError, ValueError) as error:
             self.json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
