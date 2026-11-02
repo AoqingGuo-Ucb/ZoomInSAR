@@ -237,6 +237,38 @@ This replaces the time-series results in that output folder. Keep a copy first
 if needed, then rerun the automatic comparison. Select the sign using the
 matched-track, matched-period point series—not by merely reversing a colourbar.
 
+### Optional NISAR GSLC pixel-offset tracking
+
+Pixel-offset tracking (POT) is an optional, amplitude-based branch for large or
+rapid deformation where phase coherence or unwrapping is unreliable. It uses
+the original NISAR GSLC `.h5` products, not SWEETS `*.int.tif` files. The GSLC
+directory is entered interactively in the terminal; all POT outputs are stored
+under `InSAR_PixelOffset/OUTPUT/Dataset_NAME/` beside the usual results.
+
+Create the package environment once:
+
+```bash
+cd InSAR_PixelOffset
+python3 -m venv .venv
+.venv/bin/pip install -e .
+cd ..
+```
+
+Run POT only, without repeating phase-InSAR stages:
+
+```bash
+python3 run_insar_pipeline.py \
+  --pixel-offset-only \
+  --choose-gslc-dir \
+  --dataset DATASET_NAME \
+  --output-root /path/to/ZoomInSAR_Results
+```
+
+The default tracker uses Frequency A, HH polarization, a 64-pixel matching
+window, a 12-pixel search radius, and a 32-pixel output stride. It writes
+map-grid x/y offsets and peak normalized cross-correlation. Inspect correlation
+quality before interpreting offsets as deformation.
+
 To create map panels (a) and (b) from only one named ASF product, use the
 single-granule mode below. A single `*.unw.nc` is **not** a multi-year velocity
 or time-series comparison:

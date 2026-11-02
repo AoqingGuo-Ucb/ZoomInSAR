@@ -116,6 +116,20 @@ def main() -> None:
         "--sweets-dem",
         help="Optional DEM for SWEETS processing. If omitted, <sweets-dir>/dem.tif is used when present.",
     )
+    parser.add_argument("--pixel-offset", action="store_true",
+                        help="Run optional NISAR GSLC pixel-offset tracking after the phase-InSAR workflow.")
+    parser.add_argument("--pixel-offset-only", action="store_true",
+                        help="Run only NISAR GSLC pixel-offset tracking; do not run phase-InSAR stages.")
+    parser.add_argument("--gslc-dir", help="Folder containing original NISAR GSLC .h5 files for pixel-offset tracking")
+    parser.add_argument("--choose-gslc-dir", action="store_true",
+                        help="Prompt for the NISAR GSLC directory in the terminal when running pixel-offset tracking.")
+    parser.add_argument("--pot-frequency", choices=("A", "B"), default="A")
+    parser.add_argument("--pot-polarization", default="HH")
+    parser.add_argument("--pot-window-pixels", type=int, default=64)
+    parser.add_argument("--pot-search-pixels", type=int, default=12)
+    parser.add_argument("--pot-stride-pixels", type=int, default=32)
+    parser.add_argument("--pot-min-correlation", type=float, default=0.25)
+    parser.add_argument("--pot-max-baseline-days", type=int, default=24)
     parser.add_argument(
         "--compute-dataset",
         help=(
@@ -303,6 +317,11 @@ def main() -> None:
     parser.add_argument("--skip-timeseries", action="store_true")
     args = parser.parse_args()
 
+    if args.pixel_offset_only:
+        args.pixel_offset = True
+        args.skip_cropper = args.skip_filtering = args.skip_unwrapping = True
+        args.skip_detrending = args.skip_timeseries = True
+
     # SWEETS is used here for NISAR GSLC-derived interferograms. Keep legacy
     # GAMMA/Sentinel-1 values unchanged, while allowing explicit overrides for
     # a different SWEETS sensor or independently validated phase convention.
@@ -333,6 +352,15 @@ def main() -> None:
     if args.source == "sweets" and not crop_dataset:
         parser.error("--dataset is required when --source sweets")
     compute_dataset = dataset_name(args.compute_dataset) or crop_dataset
+    if args.pixel_offset and not compute_dataset:
+        parser.error("--pixel-offset requires --dataset or --compute-dataset")
+    if args.pixel_offset and args.choose_gslc_dir:
+        args.gslc_dir = str(choose_path(
+            "NISAR GSLC directory", Path(args.gslc_dir).expanduser() if args.gslc_dir else None,
+            directory=True,
+        ))
+    if args.pixel_offset and not args.gslc_dir:
+        parser.error("--gslc-dir is required with --pixel-offset (or use --choose-gslc-dir)")
     dataset_args = ["--dataset", compute_dataset] if compute_dataset else []
     pair_args = ["--pair", args.pair] if args.pair else []
     output_dem = data_root / "DEM" / "rasters_USGS10m" / "output_USGS10m.tif"
@@ -348,10 +376,12 @@ def main() -> None:
     filtering_dir = ROOT / "InSAR_Filtering"
     detrend_dir = ROOT / "InSAR_Detrending"
     timeseries_dir = ROOT / "InSAR_Timeseries"
+    pixel_offset_dir = ROOT / "InSAR_PixelOffset"
     filtering_output = output_root / "InSAR_Filtering" / "OUTPUT"
     unwrapping_output = output_root / "InSAR_Unwrapping" / "OUTPUT"
     detrending_output = output_root / "InSAR_Detrending" / "OUTPUT"
     timeseries_output = output_root / "InSAR_Timeseries" / "OUTPUT"
+    pixel_offset_output = output_root / "InSAR_PixelOffset" / "OUTPUT"
 
     if args.source == "sweets":
         run(
@@ -524,6 +554,25 @@ def main() -> None:
                 "--phase-sign", str(args.timeseries_phase_sign),
                 *(["--allow-low-quality-bridges"] if args.allow_low_quality_bridges else []),
                 *dataset_args,
+            ],
+        )
+
+    if args.pixel_offset:
+        run(
+            "6/6  NISAR GSLC Pixel-Offset Tracking",
+            venv_python(pixel_offset_dir),
+            "insar_pixel_offset", pixel_offset_dir,
+            [
+                "--gslc-dir", str(Path(args.gslc_dir).expanduser().resolve()),
+                "--output-dir", str(pixel_offset_output),
+                "--dataset", compute_dataset,
+                "--frequency", args.pot_frequency,
+                "--polarization", args.pot_polarization,
+                "--window-pixels", str(args.pot_window_pixels),
+                "--search-pixels", str(args.pot_search_pixels),
+                "--stride-pixels", str(args.pot_stride_pixels),
+                "--min-correlation", str(args.pot_min_correlation),
+                "--max-baseline-days", str(args.pot_max_baseline_days),
             ],
         )
 
