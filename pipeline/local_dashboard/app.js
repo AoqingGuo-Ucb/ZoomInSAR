@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false, selectedPoint;
+let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelliteLayer, velocityOverlay, projectOutline, opticalOutline, overviewLayer, pointMarker, opticalPointMarker, synchronizing = false, selectedPoint, plottedSeries;
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
@@ -164,8 +164,17 @@ async function loadOverview() {
   catch (error) { showStatus(`Error: ${error.message}`); }
 }
 
+function renderSeriesValues(series) {
+  const rows = series.dates.map((date, index) => {
+    const value = series.displacement_mm[index];
+    return `<tr><td>${date}</td><td>${value === null ? "No data" : `${value.toFixed(1)} mm`}</td></tr>`;
+  }).join("");
+  $("series-values").querySelector("div").innerHTML = `<table><thead><tr><th>Date</th><th>Cumulative LOS displacement</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function drawChart(series) {
   const valid = series.displacement_mm.map((value, index) => value === null ? null : [index, value]).filter(Boolean);
+  plottedSeries = { series, valid, pad: 45, width: 900, height: 260 };
   chartCanvas.width = 900; chartCanvas.height = 260;
   const context = chartCanvas.getContext("2d"), width = chartCanvas.width, height = chartCanvas.height, pad = 45;
   context.clearRect(0, 0, width, height); if (!valid.length) return;
@@ -173,8 +182,22 @@ function drawChart(series) {
   context.strokeStyle = "#d8dddb"; context.lineWidth = 1;
   for (let i = 0; i < 5; i += 1) { const y = pad + i * (height - 2 * pad) / 4; context.beginPath(); context.moveTo(pad, y); context.lineTo(width - pad, y); context.stroke(); context.fillStyle = "#60717e"; context.font = "12px system-ui"; context.fillText((ymax - i * span / 4).toFixed(1), 4, y + 4); }
   context.strokeStyle = "#b83c3c"; context.lineWidth = 2; context.beginPath();
-  valid.forEach(([index, value], number) => { const x = pad + index * (width - 2 * pad) / (series.dates.length - 1), y = height - pad - (value - ymin) * (height - 2 * pad) / span; number ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke();
+  valid.forEach(([index, value], number) => { const x = pad + index * (width - 2 * pad) / Math.max(series.dates.length - 1, 1), y = height - pad - (value - ymin) * (height - 2 * pad) / span; number ? context.lineTo(x, y) : context.moveTo(x, y); }); context.stroke();
+  context.fillStyle = "#b83c3c";
+  valid.forEach(([index, value]) => { const x = pad + index * (width - 2 * pad) / Math.max(series.dates.length - 1, 1), y = height - pad - (value - ymin) * (height - 2 * pad) / span; context.beginPath(); context.arc(x, y, 2.5, 0, 2 * Math.PI); context.fill(); });
   context.fillStyle = "#60717e"; context.font = "12px system-ui"; context.fillText(series.dates[0], pad, height - 12); context.fillText(series.dates.at(-1), width - pad - 78, height - 12); context.fillText("Cumulative LOS displacement (mm)", pad, 16);
+  renderSeriesValues(series);
+}
+
+function inspectChart(event) {
+  if (!plottedSeries?.valid.length) return;
+  const rect = chartCanvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) * chartCanvas.width / rect.width;
+  const { series, valid, pad, width } = plottedSeries;
+  const index = Math.round((x - pad) * Math.max(series.dates.length - 1, 1) / (width - 2 * pad));
+  const closest = valid.reduce((best, point) => Math.abs(point[0] - index) < Math.abs(best[0] - index) ? point : best);
+  if (Math.abs(closest[0] - index) > 2) return;
+  $("chart-readout").textContent = `${series.dates[closest[0]]}: ${closest[1].toFixed(1)} mm cumulative LOS displacement`;
 }
 
 async function loadPointTimeSeries(longitude, latitude) {
@@ -199,9 +222,12 @@ async function clickMap(event) {
 function configureProject(id) {
   if (selected?.id !== id) {
     selectedPoint = undefined;
+    plottedSeries = undefined;
     chartCanvas.getContext("2d").clearRect(0, 0, chartCanvas.width, chartCanvas.height);
     $("series-title").textContent = "Click the velocity map";
     $("point").textContent = "";
+    $("chart-readout").textContent = "Hover over a plotted observation to inspect its date and displacement.";
+    $("series-values").querySelector("div").innerHTML = "";
   }
   selected = projects.find((project) => project.id === id); if (!selected) return false;
   $("project").value = selected.id;
@@ -229,6 +255,7 @@ async function initialize() {
     select.onchange = () => selectProject(select.value, true);
     $("update").onclick = () => loadMap(false); $("zoom-project").onclick = zoomToProject; $("show-overview").onclick = loadOverview;
     $("reset").onclick = () => { if (!selected) return; $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1); loadMap(false); };
+    chartCanvas.addEventListener("mousemove", inspectChart);
     configureProject(projects[0].id); loadOverview();
   } catch (error) { showStatus(`Could not load dashboard: ${error.message}`); }
 }
