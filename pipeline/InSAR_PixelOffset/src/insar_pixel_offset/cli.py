@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--search-pixels", type=int, default=12)
     parser.add_argument("--stride-pixels", type=int, default=32)
     parser.add_argument("--min-correlation", type=float, default=0.25)
+    parser.add_argument("--min-baseline-days", type=int, default=0,
+                        help="Minimum temporal baseline included in tracking pairs")
     parser.add_argument("--max-baseline-days", type=int, default=24)
     args = parser.parse_args()
     if not 0 <= args.min_correlation <= 1:
@@ -29,7 +31,7 @@ def main() -> None:
             frequency=args.frequency.upper(), polarization=args.polarization.upper(),
             window_pixels=args.window_pixels, search_pixels=args.search_pixels,
             stride_pixels=args.stride_pixels, min_correlation=args.min_correlation,
-            max_baseline_days=args.max_baseline_days,
+            min_baseline_days=args.min_baseline_days, max_baseline_days=args.max_baseline_days,
         ),
     )
     print(json.dumps(result, indent=2))

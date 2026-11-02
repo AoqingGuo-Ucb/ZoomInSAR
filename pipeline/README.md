@@ -269,6 +269,11 @@ window, a 12-pixel search radius, and a 32-pixel output stride. It writes
 map-grid x/y offsets and peak normalized cross-correlation. Inspect correlation
 quality before interpreting offsets as deformation.
 
+NISAR often has 12-day acquisitions, but POT pairs do not need to be limited to
+12 days. For example, process only 24–48 day pairs with
+`--pot-min-baseline-days 24 --pot-max-baseline-days 48`. Longer intervals give
+larger measurable offsets but may reduce correlation and create more pairs.
+
 To create map panels (a) and (b) from only one named ASF product, use the
 single-granule mode below. A single `*.unw.nc` is **not** a multi-year velocity
 or time-series comparison:

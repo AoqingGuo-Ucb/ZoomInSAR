@@ -23,14 +23,25 @@ class PixelOffsetConfig:
     search_pixels: int = 12
     stride_pixels: int = 32
     min_correlation: float = 0.25
+    min_baseline_days: int = 0
     max_baseline_days: int = 24
 
 
-def adjacent_pairs(scenes: list[GslcScene], max_baseline_days: int) -> list[tuple[GslcScene, GslcScene]]:
-    pairs = [(first, second) for first, second in zip(scenes[:-1], scenes[1:])
-             if (second.date - first.date).days <= max_baseline_days]
+def temporal_pairs(scenes: list[GslcScene], min_baseline_days: int,
+                   max_baseline_days: int) -> list[tuple[GslcScene, GslcScene]]:
+    """Select every scene pair whose temporal baseline is in the requested range."""
+    if min_baseline_days < 0 or max_baseline_days < min_baseline_days:
+        raise ValueError("Require 0 <= min_baseline_days <= max_baseline_days")
+    pairs = [
+        (first, second)
+        for first_index, first in enumerate(scenes[:-1])
+        for second in scenes[first_index + 1:]
+        if min_baseline_days <= (second.date - first.date).days <= max_baseline_days
+    ]
     if not pairs:
-        raise ValueError(f"No adjacent GSLC pairs within {max_baseline_days} days")
+        raise ValueError(
+            f"No GSLC pairs with temporal baseline {min_baseline_days}–{max_baseline_days} days"
+        )
     return pairs
 
 
@@ -54,7 +65,7 @@ def run_pixel_offset(
 ) -> dict:
     config = config or PixelOffsetConfig()
     scenes = discover_scenes(gslc_dir)
-    pairs = adjacent_pairs(scenes, config.max_baseline_days)
+    pairs = temporal_pairs(scenes, config.min_baseline_days, config.max_baseline_days)
     output = Path(output_dir) / (dataset if dataset.startswith("Dataset_") else f"Dataset_{dataset}")
     output.mkdir(parents=True, exist_ok=True)
     figures = output / "figures"

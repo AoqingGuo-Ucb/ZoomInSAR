@@ -129,6 +129,7 @@ def main() -> None:
     parser.add_argument("--pot-search-pixels", type=int, default=12)
     parser.add_argument("--pot-stride-pixels", type=int, default=32)
     parser.add_argument("--pot-min-correlation", type=float, default=0.25)
+    parser.add_argument("--pot-min-baseline-days", type=int, default=0)
     parser.add_argument("--pot-max-baseline-days", type=int, default=24)
     parser.add_argument(
         "--compute-dataset",
@@ -572,6 +573,7 @@ def main() -> None:
                 "--search-pixels", str(args.pot_search_pixels),
                 "--stride-pixels", str(args.pot_stride_pixels),
                 "--min-correlation", str(args.pot_min_correlation),
+                "--min-baseline-days", str(args.pot_min_baseline_days),
                 "--max-baseline-days", str(args.pot_max_baseline_days),
             ],
         )

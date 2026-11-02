@@ -34,5 +34,9 @@ python -m insar_pixel_offset \
 ```
 
 Start with the default 64-pixel matching window, 12-pixel search radius, and
-32-pixel output stride. These are conservative screening settings; validate the
-correlation maps and offsets before interpreting them as ground displacement.
+32-pixel output stride. By default, every available pair with a temporal
+baseline from 0 to 24 days is tracked. Use `--min-baseline-days` and
+`--max-baseline-days` to select longer intervals, for example
+`--min-baseline-days 24 --max-baseline-days 48`. These are conservative
+screening settings; validate the correlation maps and offsets before
+interpreting them as ground displacement.
