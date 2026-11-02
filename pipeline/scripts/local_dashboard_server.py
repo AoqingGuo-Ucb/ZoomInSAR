@@ -210,6 +210,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_ROOT), **kwargs)
 
+    def end_headers(self) -> None:
+        # The dashboard changes often during local development. Do not allow a
+        # browser to keep an earlier JavaScript version after the server is
+        # restarted, because that would silently mix old UI behavior with a
+        # new Python API.
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
     def json_response(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
         encoded = json.dumps(payload).encode("utf-8")
         self.send_response(status)
