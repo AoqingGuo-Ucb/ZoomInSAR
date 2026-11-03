@@ -54,6 +54,7 @@ class Project:
         stack = np.load(self.stack_path, mmap_mode="r")
         if stack.shape != (len(self.dates), *self.shape):
             raise ValueError("Cumulative displacement stack dimensions do not match dates and velocity shape")
+        self.pixel_offset: PixelOffsetProject | None = None
 
     def longitude_latitude(self) -> tuple[np.ndarray, np.ndarray]:
         dtype = np.dtype(">f4")
@@ -67,7 +68,7 @@ class Project:
         mask = valid_geo(longitude, latitude)
         if not np.any(mask):
             raise ValueError("No valid GEO longitude/latitude pixels")
-        return {
+        result = {
             "id": key,
             "name": self.dataset.removeprefix("Dataset_"),
             "dataset": self.dataset,
@@ -78,6 +79,9 @@ class Project:
                 float(np.nanmax(longitude[mask])), float(np.nanmax(latitude[mask])),
             ],
         }
+        if self.pixel_offset is not None:
+            result["pixel_offset"] = self.pixel_offset.summary()
+        return result
 
     def velocity_for_period(self, start: datetime | None, end: datetime | None) -> np.ndarray:
         if ((start is None or start <= self.dates[0])
@@ -161,8 +165,6 @@ class Project:
         if not selected:
             raise ValueError("The chosen period contains no acquisitions")
         series = np.asarray(stack[selected, row, col], dtype=float) * 1000.0
-        # A selected time window should read as cumulative displacement within
-        # that window, so reference its first finite observation to zero.
         finite = np.flatnonzero(np.isfinite(series))
         if finite.size:
             series = series - series[finite[0]]
@@ -173,6 +175,60 @@ class Project:
             "displacement_mm": [None if not math.isfinite(value) else round(float(value), 3) for value in series],
         }
 
+
+class PixelOffsetProject:
+    """Read the compact pairwise products written by InSAR_PixelOffset."""
+
+    def __init__(self, result_dir: Path, bounds: list[float]):
+        self.result_dir = result_dir
+        self.bounds = bounds
+        self.records = json.loads((result_dir / "pair_dates.json").read_text(encoding="utf-8"))
+        self.x_path = result_dir / "x_offset_m.npy"
+        self.y_path = result_dir / "y_offset_m.npy"
+        self.unit = "m" if self.x_path.is_file() and self.y_path.is_file() else "pixels"
+        if self.unit == "pixels":
+            self.x_path, self.y_path = result_dir / "x_offset_pixels.npy", result_dir / "y_offset_pixels.npy"
+        self.correlation_path = result_dir / "correlation.npy"
+        self.shape = tuple(np.load(self.x_path, mmap_mode="r").shape)
+        if len(self.shape) != 3 or self.shape[0] != len(self.records):
+            raise ValueError("Pixel-offset arrays do not match pair_dates.json")
+
+    def summary(self) -> dict:
+        return {
+            "pair_count": len(self.records), "unit": self.unit,
+            "pairs": [
+                {"index": index, "label": f"{record['reference_date']} to {record['secondary_date']}",
+                 "baseline_days": record["baseline_days"]}
+                for index, record in enumerate(self.records)
+            ],
+        }
+
+    def map_payload(self, pair_index: int, field: str, maximum: int = 360) -> dict:
+        if not 0 <= pair_index < len(self.records):
+            raise ValueError("Unknown pixel-offset pair")
+        paths = {"x": self.x_path, "y": self.y_path, "correlation": self.correlation_path}
+        if field not in paths:
+            raise ValueError("Pixel-offset field must be x, y, or correlation")
+        values = np.asarray(np.load(paths[field], mmap_mode="r")[pair_index], dtype=np.float32)
+        if field in {"x", "y"} and self.unit == "m":
+            values *= 1000.0
+            unit = "mm"
+        else:
+            unit = "" if field == "correlation" else self.unit
+        scale = min(1.0, maximum / max(values.shape))
+        height, width = max(1, round(values.shape[0] * scale)), max(1, round(values.shape[1] * scale))
+        row = np.linspace(0, values.shape[0] - 1, height).astype(int)
+        col = np.linspace(0, values.shape[1] - 1, width).astype(int)
+        grid = values[np.ix_(row, col)]
+        finite = grid[np.isfinite(grid)]
+        limit = 1.0 if field == "correlation" else max(float(np.nanpercentile(np.abs(finite), 98)), 1e-5)
+        record = self.records[pair_index]
+        return {
+            "bounds": self.bounds, "width": width, "height": height,
+            "limit": limit, "values": [None if not math.isfinite(value) else round(float(value), 5) for value in grid.ravel()],
+            "field": field, "unit": unit, "color_mode": "quality" if field == "correlation" else "diverging",
+            "period": [record["reference_date"], record["secondary_date"]],
+        }
 
 def discover_projects(data_root: Path, recursive: bool = False) -> dict[str, Project]:
     projects: dict[str, Project] = {}
@@ -189,6 +245,10 @@ def discover_projects(data_root: Path, recursive: bool = False) -> dict[str, Pro
             results_root = result_dir.parents[2]
             project = Project(result_dir, results_root)
             key = str(result_dir.relative_to(data_root))
+            bounds = project.summary(key)["bounds"]
+            pot_dir = results_root / "InSAR_PixelOffset" / "OUTPUT" / project.dataset
+            if pot_dir.is_dir():
+                project.pixel_offset = PixelOffsetProject(pot_dir, bounds)
             projects[key] = project
         except (FileNotFoundError, ValueError, json.JSONDecodeError) as error:
             print(f"Skipping {result_dir}: {error}")
@@ -267,6 +327,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 resolution = int(query.get("resolution", ["360"])[0])
                 resolution = min(max(resolution, 100), 900)
                 return self.json_response(project.map_payload(start, end, maximum=resolution))
+            if parsed.path == "/api/pixel-offset":
+                if project.pixel_offset is None:
+                    raise ValueError("No pixel-offset result is available for this project")
+                pair = int(query.get("pair", ["0"])[0])
+                field = query.get("field", ["x"])[0]
+                resolution = min(max(int(query.get("resolution", ["360"])[0]), 100), 900)
+                return self.json_response(project.pixel_offset.map_payload(pair, field, maximum=resolution))
             if parsed.path == "/api/timeseries":
                 start = datetime.fromisoformat(query["start"][0]) if query.get("start", [""])[0] else None
                 end = datetime.fromisoformat(query["end"][0]) if query.get("end", [""])[0] else None

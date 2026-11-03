@@ -87,19 +87,20 @@ def discover_sweets_slc_directory(project_root: Path) -> Path:
             scene_file.parent,
         )
         stacks.setdefault(stack, []).append(scene_file)
-    candidates = sorted(stack for stack, files in stacks.items() if len(files) >= 2)
-    if len(candidates) == 1:
-        return candidates[0]
+    candidates = [(stack, files) for stack, files in stacks.items() if len(files) >= 2]
     if not candidates:
         raise FileNotFoundError(
             f"No stack with at least two SWEETS SLC/CSLC scene files found below {gslcs_root}. "
             f"Found {len(scene_files)} candidate file(s)."
         )
-    found = ", ".join(str(path) for path in candidates)
-    raise ValueError(
-        "More than one SWEETS SLC stack was found. Select one with --gslc-dir. "
-        f"Candidates: {found}"
-    )
+    # Prefer the stack with the most dates.  This is a reproducible default for
+    # project-only runs; tie-break by directory name so the result is stable.
+    chosen, scenes = sorted(candidates, key=lambda item: (-len(item[1]), str(item[0])))[0]
+    if len(candidates) > 1:
+        choices = ", ".join(f"{path.name} ({len(files)} scenes)" for path, files in candidates)
+        print(f"Multiple SLC stacks found; automatically selected {chosen.name} ({len(scenes)} scenes). "
+              f"Available: {choices}", flush=True)
+    return chosen
 
 
 def choose_path(label: str, default: Path | None, *, directory: bool) -> Path:

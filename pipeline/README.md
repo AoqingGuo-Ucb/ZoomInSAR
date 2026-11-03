@@ -269,7 +269,8 @@ For a standard project at `CA_Landfill/29Palms`, this automatically finds the
 single usable SLC stack below `work/gslcs/scratch/` and saves results to
 `CA_Landfill/29Palms/ZoomInSAR_Results/`. `--projects-root` may be any folder
 that contains project folders. If a project has several valid tracks/stacks,
-explicitly select one with `--gslc-dir`; alternatively, set
+automatic mode selects the stack with the most dated scenes (then sorts by name
+to break a tie) and prints its decision. Override this with `--gslc-dir`; use
 `--project-root /path/to/project` for one exact project folder.
 The default tracker uses Frequency A, HH polarization, a 64-pixel matching
 window, a 12-pixel search radius, and a 32-pixel output stride. It writes

@@ -3,8 +3,12 @@ let projects = [], profiles = {}, selected, currentMap, map, opticalMap, satelli
 const chartCanvas = $("chart");
 const californiaBounds = [[32.45, -124.55], [42.15, -114.05]];
 
-function color(value, limit) {
+function color(value, limit, mode = "diverging") {
   if (value === null || Number.isNaN(value)) return [0, 0, 0, 0];
+  if (mode === "quality") {
+    const strength = Math.min(1, Math.max(0, value / limit));
+    return [Math.round(55 + 170 * strength), Math.round(45 + 165 * strength), Math.round(100 - 45 * strength), 225];
+  }
   const strength = Math.min(1, Math.abs(value) / limit);
   const endpoint = value < 0 ? [35, 71, 162] : [191, 38, 52];
   return endpoint.map((channel) => Math.round(245 + (channel - 245) * strength)).concat(225);
@@ -51,7 +55,8 @@ function enterOverviewLayout() {
 function makeVelocityImage(payload, drawDots = false) {
   const canvas = document.createElement("canvas"); canvas.width = payload.width; canvas.height = payload.height;
   const context = canvas.getContext("2d"); const image = context.createImageData(payload.width, payload.height);
-  payload.values.forEach((value, index) => image.data.set(color(value, payload.limit_mm_year), index * 4));
+  const limit = payload.limit_mm_year ?? payload.limit;
+  payload.values.forEach((value, index) => image.data.set(color(value, limit, payload.color_mode), index * 4));
   context.putImageData(image, 0, 0);
   if (!drawDots) return canvas.toDataURL("image/png");
 
@@ -72,7 +77,7 @@ function makeVelocityImage(payload, drawDots = false) {
   };
   payload.values.forEach((value, index) => {
     if (value === null) return;
-    const [red, green, blue] = color(value, payload.limit_mm_year);
+    const [red, green, blue] = color(value, limit, payload.color_mode);
     context.fillStyle = `rgb(${red}, ${green}, ${blue})`;
     context.strokeStyle = "rgba(25, 35, 45, 0.42)";
     context.lineWidth = 0.45;
@@ -116,11 +121,13 @@ function drawMap(payload, zoomToProject) {
   velocityOverlay = L.imageOverlay(makeVelocityImage(payload, true), bounds, { opacity: 0.90, interactive: false, className: "velocity-overlay" }).addTo(map);
   projectOutline = L.rectangle(bounds, { color: "#f4cd39", weight: 2, fill: false, interactive: false }).addTo(map);
   opticalOutline = L.rectangle(bounds, { color: "#f4cd39", weight: 2, fill: false, interactive: false }).addTo(opticalMap);
-  $("map-title").textContent = selected.name;
-  $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
-  $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
+  const pot = $("product").value === "pot";
+  const limit = payload.limit_mm_year ?? payload.limit;
+  $("map-title").textContent = pot ? `${selected.name} — Pixel-offset tracking` : selected.name;
+  $("limit-left").textContent = pot && payload.color_mode === "quality" ? "0" : `-${limit.toFixed(1)} ${payload.unit || "mm/year"}`;
+  $("limit-right").textContent = pot && payload.color_mode === "quality" ? "1.0 correlation" : `+${limit.toFixed(1)} ${payload.unit || "mm/year"}`;
   $("period").textContent = `${payload.period[0]} — ${payload.period[1]}`;
-  if (selectedPoint) showSelectedPoint(selectedPoint.latitude, selectedPoint.longitude);
+  if (!pot && selectedPoint) showSelectedPoint(selectedPoint.latitude, selectedPoint.longitude);
   if (zoomToProject) requestAnimationFrame(() => fitProject(payload));
 }
 
@@ -138,8 +145,8 @@ function drawOverview(payload) {
   overviewLayer.addTo(map);
   $("map-title").textContent = "All California results";
   $("period").textContent = "Full available time spans";
-  $("limit-left").textContent = payload.limit_mm_year.toFixed(1);
-  $("limit-right").textContent = payload.limit_mm_year.toFixed(1);
+  $("limit-left").textContent = `-${payload.limit_mm_year.toFixed(1)} mm/year`;
+  $("limit-right").textContent = `+${payload.limit_mm_year.toFixed(1)} mm/year`;
   requestAnimationFrame(() => map.fitBounds(californiaBounds));
 }
 
@@ -157,6 +164,22 @@ async function loadMap(zoomToProject = false) {
     }
   }
   catch (error) { showStatus(`Error: ${error.message}`); }
+}
+async function loadPotMap(zoomToProject = false) {
+  if (!selected?.pixel_offset) return;
+  showStatus("Loading pixel-offset result…");
+  selectedPoint = undefined;
+  try {
+    const pair = $("pot-pair").value || "0", field = $("pot-field").value;
+    const payload = await api(`/api/pixel-offset?project=${encodeURIComponent(selected.id)}&pair=${pair}&field=${field}&resolution=720`);
+    drawMap(payload, zoomToProject);
+    $("series-title").textContent = "Pixel-offset tracking result";
+    $("point").textContent = "POT is pairwise; it does not provide a cumulative LOS time series.";
+    chartCanvas.getContext("2d").clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+    $("chart-readout").textContent = "Switch to Phase InSAR to inspect a point displacement time series.";
+    $("series-values").querySelector("div").innerHTML = "";
+    showStatus(`POT ${field} map loaded for ${payload.period[0]} to ${payload.period[1]}.`);
+  } catch (error) { showStatus(`Error: ${error.message}`); }
 }
 async function loadOverview() {
   showStatus("Loading all California velocity results…");
@@ -211,6 +234,7 @@ async function loadPointTimeSeries(longitude, latitude) {
 }
 
 async function clickMap(event) {
+  if ($("product").value === "pot") { showStatus("POT is a pairwise offset product. Switch to Phase InSAR to request a point time series."); return; }
   if (!currentMap) { showStatus("Click a red project marker or choose a project before requesting a point time series."); return; }
   const [[south, west], [north, east]] = boundsFor(currentMap), { lat, lng } = event.latlng;
   if (lng < west || lng > east || lat < south || lat > north) { showStatus("Click inside the yellow project boundary to retrieve a point time series."); return; }
@@ -231,6 +255,13 @@ function configureProject(id) {
   }
   selected = projects.find((project) => project.id === id); if (!selected) return false;
   $("project").value = selected.id;
+  const product = $("product"); product.innerHTML = "";
+  product.add(new Option("Phase InSAR", "insar"));
+  if (selected.pixel_offset) product.add(new Option("Pixel-offset tracking (POT)", "pot"));
+  product.value = "insar";
+  const pot = selected.pixel_offset;
+  $("pot-pair").innerHTML = "";
+  if (pot) pot.pairs.forEach((pair) => $("pot-pair").add(new Option(`${pair.label} (${pair.baseline_days} days)`, pair.index)));
   $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1);
   $("details").innerHTML = `<h2>Project details</h2><p>${selected.shape[1]} × ${selected.shape[0]} pixels<br>${selected.dates.length} acquisitions<br>${selected.dates[0]} to ${selected.dates.at(-1)}</p>`;
   const profile = profiles[selected.id];
@@ -244,7 +275,12 @@ function configureProject(id) {
   }
   return true;
 }
-function selectProject(id, zoomToProject) { if (configureProject(id)) loadMap(zoomToProject); }
+function loadSelectedProduct(zoomToProject = false) {
+  $("phase-controls").hidden = $("product").value === "pot";
+  $("pot-controls").hidden = $("product").value !== "pot";
+  if ($("product").value === "pot") loadPotMap(zoomToProject); else loadMap(zoomToProject);
+}
+function selectProject(id, zoomToProject) { if (configureProject(id)) loadSelectedProduct(zoomToProject); }
 
 async function initialize() {
   initializeMap();
@@ -253,7 +289,8 @@ async function initialize() {
     projects = projectResponse.projects; profiles = profileResponse.profiles;
     const select = $("project"); projects.forEach((project) => select.add(new Option(project.name, project.id)));
     select.onchange = () => selectProject(select.value, true);
-    $("update").onclick = () => loadMap(false); $("zoom-project").onclick = zoomToProject; $("show-overview").onclick = loadOverview;
+    $("update").onclick = () => loadMap(false); $("update-pot").onclick = () => loadPotMap(false); $("zoom-project").onclick = zoomToProject; $("show-overview").onclick = loadOverview;
+    $("product").onchange = () => loadSelectedProduct(true);
     $("reset").onclick = () => { if (!selected) return; $("start").value = selected.dates[0]; $("end").value = selected.dates.at(-1); loadMap(false); };
     chartCanvas.addEventListener("mousemove", inspectChart);
     configureProject(projects[0].id); loadOverview();
