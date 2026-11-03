@@ -35,7 +35,7 @@ def plot_pair(
     axes[2].set_title("Peak normalized correlation")
     axes[2].set_xlabel("Offset-grid column"); axes[2].set_ylabel("Offset-grid row")
     figure.colorbar(quality, ax=axes[2], shrink=0.82)
-    figure.suptitle(f"NISAR GSLC pixel offsets: {pair_label}")
+    figure.suptitle(f"Pixel offsets: {pair_label}")
     figure.savefig(destination, dpi=180)
     plt.close(figure)
 
@@ -56,6 +56,6 @@ def plot_summary(destination: Path, records: list[dict], x_stack: np.ndarray,
     axes[1].set_ylim(0, 1); axes[1].set_ylabel("Median correlation"); axes[1].grid(alpha=0.25)
     axes[2].bar(dates, [record["valid_offsets"] for record in records], width=5, color="#6a6485")
     axes[2].set_ylabel("Valid offsets"); axes[2].set_xlabel("Secondary acquisition date"); axes[2].grid(alpha=0.25)
-    figure.suptitle("NISAR GSLC pixel-offset tracking summary")
+    figure.suptitle("Pixel-offset tracking summary")
     figure.savefig(destination, dpi=180)
     plt.close(figure)

@@ -1,4 +1,4 @@
-"""Command-line interface for GSLC pixel-offset tracking."""
+"""Command-line interface for geocoded SLC/GSLC pixel-offset tracking."""
 
 from __future__ import annotations
 
@@ -9,8 +9,11 @@ from .pipeline import PixelOffsetConfig, run_pixel_offset
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Track map-grid offsets in consecutive NISAR GSLC products")
-    parser.add_argument("--gslc-dir", required=True, help="Folder containing original NISAR GSLC .h5 files")
+    parser = argparse.ArgumentParser(description="Track map-grid offsets in NISAR GSLC or SWEETS Sentinel SLC products")
+    parser.add_argument(
+        "--gslc-dir", required=True,
+        help="Folder containing NISAR GSLC .h5 files or SWEETS complex *.slc.tif files",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--frequency", default="A", choices=("A", "B", "a", "b"))

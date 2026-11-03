@@ -1,4 +1,4 @@
-"""Discovery and safe reading of NISAR GSLC complex-amplitude datasets."""
+"""Discovery and safe reading of geocoded complex SLC/GSLC scenes."""
 
 from __future__ import annotations
 
@@ -11,33 +11,48 @@ import h5py
 import numpy as np
 
 
-_DATE = re.compile(r"(20\d{6})T\d{6}")
+_DATE = re.compile(r"(20\d{6})(?:T\d{6})?")
 
 
 @dataclass(frozen=True)
 class GslcScene:
     path: Path
     date: datetime
+    format: str
 
 
 def acquisition_date(path: Path) -> datetime:
     match = _DATE.search(path.name)
     if not match:
-        raise ValueError(f"Could not find YYYYMMDDTHHMMSS acquisition time in {path.name}")
+        raise ValueError(f"Could not find a YYYYMMDD acquisition date in {path.name}")
     return datetime.strptime(match.group(1), "%Y%m%d")
 
 
 def discover_scenes(directory: str | Path) -> list[GslcScene]:
     directory = Path(directory).expanduser()
     scenes = []
-    for path in sorted({*directory.rglob("*.h5"), *directory.rglob("*.hdf5")}):
+    hdf_files = {*directory.rglob("*.h5"), *directory.rglob("*.hdf5")}
+    # SWEETS writes the geocoded, complex Sentinel-1 SLC to these GeoTIFFs.
+    slc_tifs = {*directory.rglob("*.slc.tif"), *directory.rglob("*.SLC.tif")}
+    for path in sorted(hdf_files | slc_tifs):
         try:
-            scenes.append(GslcScene(path, acquisition_date(path)))
+            scenes.append(GslcScene(
+                path, acquisition_date(path),
+                "geotiff" if path in slc_tifs else "hdf5",
+            ))
         except ValueError:
             continue
     scenes.sort(key=lambda scene: (scene.date, scene.path.name))
     if len(scenes) < 2:
-        raise FileNotFoundError(f"Need at least two dated GSLC .h5 files below {directory}")
+        raise FileNotFoundError(
+            f"Need at least two dated NISAR GSLC .h5 or SWEETS *.slc.tif files below {directory}"
+        )
+    formats = {scene.format for scene in scenes}
+    if len(formats) != 1:
+        raise ValueError(
+            "Do not mix NISAR GSLC HDF5 files and SWEETS Sentinel SLC GeoTIFFs in one run; "
+            "choose one scene directory."
+        )
     return scenes
 
 

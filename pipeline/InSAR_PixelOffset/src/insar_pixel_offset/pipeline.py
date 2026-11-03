@@ -1,4 +1,4 @@
-"""Run pairwise NISAR GSLC pixel-offset tracking."""
+"""Run pairwise geocoded SLC/GSLC pixel-offset tracking."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import h5py
 import numpy as np
+import h5py
+import rasterio
 from tqdm.auto import tqdm
 
 from .gslc import GslcScene, coordinate_steps, discover_scenes, locate_complex_dataset
@@ -46,6 +47,18 @@ def temporal_pairs(scenes: list[GslcScene], min_baseline_days: int,
 
 
 def _load_pair(first: GslcScene, second: GslcScene, config: PixelOffsetConfig):
+    if first.format != second.format:
+        raise ValueError("Pixel-offset scene formats do not match")
+    if first.format == "geotiff":
+        with rasterio.open(first.path) as first_file, rasterio.open(second.path) as second_file:
+            reference = _read_complex_geotiff(first_file, first.path)
+            secondary = _read_complex_geotiff(second_file, second.path)
+            if first_file.crs != second_file.crs or first_file.transform != second_file.transform:
+                raise ValueError(f"SWEETS SLC grids differ for {first.path.name} and {second.path.name}")
+            x_step, y_step = float(first_file.transform.a), float(first_file.transform.e)
+        if reference.shape != secondary.shape:
+            raise ValueError(f"SWEETS SLC grid shapes differ for {first.path.name} and {second.path.name}")
+        return reference, secondary, x_step, y_step, "GeoTIFF band 1 (complex SLC)"
     with h5py.File(first.path, "r") as first_file, h5py.File(second.path, "r") as second_file:
         first_path = locate_complex_dataset(first_file, config.frequency, config.polarization)
         second_path = locate_complex_dataset(second_file, config.frequency, config.polarization)
@@ -55,6 +68,18 @@ def _load_pair(first: GslcScene, second: GslcScene, config: PixelOffsetConfig):
     if reference.shape != secondary.shape:
         raise ValueError(f"GSLC grids differ for {first.path.name} and {second.path.name}")
     return reference, secondary, x_step, y_step, first_path
+
+
+def _read_complex_geotiff(dataset: rasterio.io.DatasetReader, path: Path) -> np.ndarray:
+    """Read a complex SLC from either one complex band or real/imaginary bands."""
+    first_band = dataset.read(1)
+    if np.iscomplexobj(first_band):
+        return first_band
+    if dataset.count >= 2:
+        return first_band.astype(np.float32) + 1j * dataset.read(2).astype(np.float32)
+    raise ValueError(
+        f"SWEETS SLC GeoTIFF must have one complex band or real/imaginary bands: {path}"
+    )
 
 
 def run_pixel_offset(
@@ -124,15 +149,16 @@ def run_pixel_offset(
                  correlation_stack, "m" if x_step is not None and y_step is not None else "pixels")
     (output / "pair_dates.json").write_text(json.dumps(pair_records, indent=2), encoding="utf-8")
     summary = {
-        "gslc_directory": str(Path(gslc_dir).expanduser().resolve()),
+        "scene_directory": str(Path(gslc_dir).expanduser().resolve()),
+        "input_format": scenes[0].format,
         "output_directory": str(output.resolve()),
         "config": asdict(config), "complex_dataset_path": dataset_path,
         "scene_count": len(scenes), "pair_count": len(pair_records),
         "input_shape": list(reference.shape), "offset_grid_shape": [len(rows), len(cols)],
         "x_coordinate_step_m": x_step, "y_coordinate_step_m": y_step,
         "units": {
-            "x_offset_pixels": "GSLC map-grid pixels, positive increasing x",
-            "y_offset_pixels": "GSLC map-grid pixels, positive increasing row",
+            "x_offset_pixels": "geocoded map-grid pixels, positive increasing x",
+            "y_offset_pixels": "geocoded map-grid pixels, positive increasing row",
             "correlation": "peak normalized cross-correlation",
         },
     }

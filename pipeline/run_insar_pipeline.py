@@ -54,6 +54,36 @@ def saved_sweets_directory(dataset: str | None, data_root: Path) -> Path | None:
     return Path(value) if value else None
 
 
+def project_label(dataset: str) -> str:
+    """Return the project-folder name from either NAME or Dataset_NAME."""
+    return dataset.removeprefix("Dataset_")
+
+
+def default_landfill_project_root(dataset: str) -> Path:
+    """Infer the shared CA_Landfill project directory beside the ZoomInSAR clone."""
+    return ROOT.parent.parent / "CA_Landfill" / project_label(dataset)
+
+
+def discover_sweets_slc_directory(project_root: Path) -> Path:
+    """Find the one usable SWEETS complex-SLC stack for automatic POT."""
+    scratch = project_root / "work" / "gslcs" / "scratch"
+    if not scratch.is_dir():
+        raise FileNotFoundError(f"SWEETS SLC scratch directory not found: {scratch}")
+    candidates = [
+        directory for directory in sorted(path for path in scratch.iterdir() if path.is_dir())
+        if sum(1 for _ in directory.rglob("*.slc.tif")) >= 2
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise FileNotFoundError(f"No stack with at least two SWEETS *.slc.tif files found below {scratch}")
+    found = ", ".join(str(path) for path in candidates)
+    raise ValueError(
+        "More than one SWEETS SLC stack was found. Select one with --gslc-dir. "
+        f"Candidates: {found}"
+    )
+
+
 def choose_path(label: str, default: Path | None, *, directory: bool) -> Path:
     """Interactively select an existing directory or file in a terminal."""
     expectation = "directory" if directory else "file"
@@ -117,12 +147,20 @@ def main() -> None:
         help="Optional DEM for SWEETS processing. If omitted, <sweets-dir>/dem.tif is used when present.",
     )
     parser.add_argument("--pixel-offset", action="store_true",
-                        help="Run optional NISAR GSLC pixel-offset tracking after the phase-InSAR workflow.")
+                        help="Run optional pixel-offset tracking after the phase-InSAR workflow.")
     parser.add_argument("--pixel-offset-only", action="store_true",
-                        help="Run only NISAR GSLC pixel-offset tracking; do not run phase-InSAR stages.")
-    parser.add_argument("--gslc-dir", help="Folder containing original NISAR GSLC .h5 files for pixel-offset tracking")
+                        help="Run only pixel-offset tracking; do not run phase-InSAR stages.")
+    parser.add_argument("--gslc-dir",
+                        help="Folder containing NISAR GSLC .h5 or SWEETS Sentinel complex *.slc.tif files")
+    parser.add_argument(
+        "--project-root",
+        help=(
+            "Optional project folder containing work/. With --pixel-offset-only, "
+            "omit this and --gslc-dir to infer CA_Landfill/<dataset> automatically."
+        ),
+    )
     parser.add_argument("--choose-gslc-dir", action="store_true",
-                        help="Prompt for the NISAR GSLC directory in the terminal when running pixel-offset tracking.")
+                        help="Prompt for the NISAR GSLC or SWEETS Sentinel SLC directory in the terminal.")
     parser.add_argument("--pot-frequency", choices=("A", "B"), default="A")
     parser.add_argument("--pot-polarization", default="HH")
     parser.add_argument("--pot-window-pixels", type=int, default=64)
@@ -333,9 +371,20 @@ def main() -> None:
     if args.timeseries_wavelength <= 0:
         parser.error("--timeseries-wavelength must be positive")
 
-    output_root = Path(args.output_root).expanduser().resolve() if args.output_root else ROOT
-    data_root = output_root / "Data"
     crop_dataset = dataset_name(args.dataset)
+    automatic_project_root = (
+        Path(args.project_root).expanduser().resolve()
+        if args.project_root else default_landfill_project_root(crop_dataset)
+        if args.pixel_offset_only and crop_dataset else None
+    )
+    if args.output_root:
+        output_root = Path(args.output_root).expanduser().resolve()
+    elif automatic_project_root is not None and automatic_project_root.is_dir():
+        output_root = automatic_project_root / "ZoomInSAR_Results"
+        print(f"Using project output directory: {output_root}", flush=True)
+    else:
+        output_root = ROOT
+    data_root = output_root / "Data"
     saved_dir = saved_sweets_directory(crop_dataset, data_root)
     selected_sweets_dir = Path(args.sweets_dir).expanduser() if args.sweets_dir else saved_dir
     if selected_sweets_dir:
@@ -357,9 +406,12 @@ def main() -> None:
         parser.error("--pixel-offset requires --dataset or --compute-dataset")
     if args.pixel_offset and args.choose_gslc_dir:
         args.gslc_dir = str(choose_path(
-            "NISAR GSLC directory", Path(args.gslc_dir).expanduser() if args.gslc_dir else None,
+            "SLC/GSLC directory", Path(args.gslc_dir).expanduser() if args.gslc_dir else None,
             directory=True,
         ))
+    if args.pixel_offset and not args.gslc_dir and automatic_project_root is not None:
+        args.gslc_dir = str(discover_sweets_slc_directory(automatic_project_root))
+        print(f"Using discovered SLC directory: {args.gslc_dir}", flush=True)
     if args.pixel_offset and not args.gslc_dir:
         parser.error("--gslc-dir is required with --pixel-offset (or use --choose-gslc-dir)")
     dataset_args = ["--dataset", compute_dataset] if compute_dataset else []
@@ -560,7 +612,7 @@ def main() -> None:
 
     if args.pixel_offset:
         run(
-            "6/6  NISAR GSLC Pixel-Offset Tracking",
+            "6/6  SLC/GSLC Pixel-Offset Tracking",
             venv_python(pixel_offset_dir),
             "insar_pixel_offset", pixel_offset_dir,
             [
