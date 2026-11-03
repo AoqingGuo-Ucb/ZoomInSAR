@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -65,18 +66,29 @@ def default_landfill_project_root(dataset: str) -> Path:
 
 
 def discover_sweets_slc_directory(project_root: Path) -> Path:
-    """Find the one usable SWEETS complex-SLC stack for automatic POT."""
-    scratch = project_root / "work" / "gslcs" / "scratch"
-    if not scratch.is_dir():
-        raise FileNotFoundError(f"SWEETS SLC scratch directory not found: {scratch}")
-    candidates = [
-        directory for directory in sorted(path for path in scratch.iterdir() if path.is_dir())
-        if sum(1 for _ in directory.rglob("*.slc.tif")) >= 2
-    ]
+    """Find one usable SWEETS complex-SLC stack below work/gslcs."""
+    gslcs_root = project_root / "work" / "gslcs"
+    if not gslcs_root.is_dir():
+        raise FileNotFoundError(f"SWEETS GSLC directory not found: {gslcs_root}")
+    slc_files = sorted({*gslcs_root.rglob("*.slc.tif"), *gslcs_root.rglob("*.SLC.tif")})
+    stacks: dict[Path, list[Path]] = {}
+    for slc_file in slc_files:
+        # SWEETS stack folders typically look like t173_370317_iw2.  Find the
+        # nearest such ancestor so date subfolders never affect discovery.
+        stack = next(
+            (parent for parent in slc_file.parents
+             if parent != gslcs_root and re.match(r"^t\d+_", parent.name, re.IGNORECASE)),
+            slc_file.parent,
+        )
+        stacks.setdefault(stack, []).append(slc_file)
+    candidates = sorted(stack for stack, files in stacks.items() if len(files) >= 2)
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
-        raise FileNotFoundError(f"No stack with at least two SWEETS *.slc.tif files found below {scratch}")
+        raise FileNotFoundError(
+            f"No stack with at least two SWEETS *.slc.tif files found below {gslcs_root}. "
+            f"Found {len(slc_files)} SLC file(s)."
+        )
     found = ", ".join(str(path) for path in candidates)
     raise ValueError(
         "More than one SWEETS SLC stack was found. Select one with --gslc-dir. "
@@ -157,6 +169,13 @@ def main() -> None:
         help=(
             "Optional project folder containing work/. With --pixel-offset-only, "
             "omit this and --gslc-dir to infer CA_Landfill/<dataset> automatically."
+        ),
+    )
+    parser.add_argument(
+        "--projects-root",
+        help=(
+            "Folder containing project folders, for example /path/to/CA_Landfill. "
+            "With --dataset 29Palms, the project becomes <projects-root>/29Palms."
         ),
     )
     parser.add_argument("--choose-gslc-dir", action="store_true",
@@ -372,11 +391,17 @@ def main() -> None:
         parser.error("--timeseries-wavelength must be positive")
 
     crop_dataset = dataset_name(args.dataset)
+    if args.project_root and args.projects_root:
+        parser.error("Use only one of --project-root or --projects-root")
     automatic_project_root = (
         Path(args.project_root).expanduser().resolve()
         if args.project_root else default_landfill_project_root(crop_dataset)
         if args.pixel_offset_only and crop_dataset else None
     )
+    if args.projects_root:
+        if not crop_dataset:
+            parser.error("--projects-root requires --dataset")
+        automatic_project_root = Path(args.projects_root).expanduser().resolve() / project_label(crop_dataset)
     if args.output_root:
         output_root = Path(args.output_root).expanduser().resolve()
     elif automatic_project_root is not None and automatic_project_root.is_dir():
