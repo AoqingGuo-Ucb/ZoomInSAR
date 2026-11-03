@@ -56,38 +56,65 @@ def discover_scenes(directory: str | Path) -> list[GslcScene]:
     return scenes
 
 
-def _complex_paths(handle: h5py.File, frequency: str, polarization: str) -> list[str]:
+def _all_complex_paths(handle: h5py.File) -> list[str]:
+    """Return every 2-D complex dataset in an HDF5 SLC/CSLC product."""
     paths: list[str] = []
-    freq = f"frequency{frequency.upper()}"
-    pol = polarization.upper()
 
     def visit(name: str, item: h5py.Dataset | h5py.Group) -> None:
         if not isinstance(item, h5py.Dataset) or item.ndim != 2:
             return
         if not np.issubdtype(item.dtype, np.complexfloating):
             return
-        parts = name.split("/")
-        if freq in parts and parts[-1].upper() == pol:
-            paths.append(name)
+        paths.append(name)
 
     handle.visititems(visit)
     return sorted(paths)
 
 
+def _complex_paths(handle: h5py.File, frequency: str, polarization: str) -> list[str]:
+    freq = f"frequency{frequency.upper()}"
+    pol = polarization.upper()
+    return [
+        name for name in _all_complex_paths(handle)
+        if freq in name.split("/") and name.split("/")[-1].upper() == pol
+    ]
+
+
 def locate_complex_dataset(handle: h5py.File, frequency: str, polarization: str) -> str:
     candidates = _complex_paths(handle, frequency, polarization)
-    if not candidates:
-        raise ValueError(
-            f"No complex frequency{frequency.upper()}/{polarization.upper()} GSLC layer in {handle.filename}"
-        )
-    return candidates[0]
+    if candidates:
+        return candidates[0]
+
+    # Sentinel-1 SWEETS/COMPASS CSLC HDF5 products need not use the NISAR
+    # frequencyA/HH group convention. Prefer the requested polarization, then
+    # fall back only when the product has one unambiguous complex image layer.
+    all_candidates = _all_complex_paths(handle)
+    pol = polarization.upper()
+    pol_candidates = [name for name in all_candidates if name.split("/")[-1].upper() == pol]
+    if len(pol_candidates) == 1:
+        return pol_candidates[0]
+    if len(all_candidates) == 1:
+        return all_candidates[0]
+    available = ", ".join(all_candidates[:8]) or "none"
+    raise ValueError(
+        f"No unambiguous complex layer for frequency{frequency.upper()}/{pol} in {handle.filename}. "
+        f"Available complex datasets: {available}"
+    )
 
 
 def coordinate_steps(handle: h5py.File, dataset_path: str) -> tuple[float | None, float | None]:
     """Return x/y map-coordinate spacing for a GSLC image, when provided."""
-    group = handle[dataset_path].parent
-    x = group.get("xCoordinates")
-    y = group.get("yCoordinates")
-    if x is None or y is None or len(x) < 2 or len(y) < 2:
-        return None, None
-    return float(np.nanmedian(np.diff(x[...]))), float(np.nanmedian(np.diff(y[...])))
+    candidate = handle[dataset_path].parent
+    while True:
+        x = candidate.get("xCoordinates")
+        y = candidate.get("yCoordinates")
+        if x is None:
+            x = candidate.get("x_coordinates")
+        if y is None:
+            y = candidate.get("y_coordinates")
+        if x is not None and y is not None and len(x) >= 2 and len(y) >= 2:
+            return float(np.nanmedian(np.diff(x[...]))), float(np.nanmedian(np.diff(y[...])))
+        if candidate.name == "/":
+            break
+        candidate = candidate.parent
+    return None, None

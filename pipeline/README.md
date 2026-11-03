@@ -241,8 +241,9 @@ matched-track, matched-period point series—not by merely reversing a colourbar
 
 Pixel-offset tracking (POT) is an optional, amplitude-based branch for large or
 rapid deformation where phase coherence or unwrapping is unreliable. It uses
-original NISAR GSLC `.h5` products or SWEETS Sentinel complex `*.slc.tif`
-files, not SWEETS `*.int.tif` files. The SLC/GSLC directory is entered
+original NISAR GSLC `.h5` products or SWEETS Sentinel complex SLC/CSLC files
+(`*.slc.tif` or dated Sentinel `*.h5` files), not SWEETS `*.int.tif` files.
+The SLC/GSLC directory is entered
 interactively in the terminal; all POT outputs are stored
 under `InSAR_PixelOffset/OUTPUT/Dataset_NAME/` beside the usual results.
 

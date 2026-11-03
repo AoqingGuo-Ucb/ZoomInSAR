@@ -66,28 +66,34 @@ def default_landfill_project_root(dataset: str) -> Path:
 
 
 def discover_sweets_slc_directory(project_root: Path) -> Path:
-    """Find one usable SWEETS complex-SLC stack below work/gslcs."""
+    """Find one usable SWEETS complex SLC/CSLC stack below work/gslcs."""
     gslcs_root = project_root / "work" / "gslcs"
     if not gslcs_root.is_dir():
         raise FileNotFoundError(f"SWEETS GSLC directory not found: {gslcs_root}")
-    slc_files = sorted({*gslcs_root.rglob("*.slc.tif"), *gslcs_root.rglob("*.SLC.tif")})
+    scene_files = sorted({
+        *gslcs_root.rglob("*.slc.tif"), *gslcs_root.rglob("*.SLC.tif"),
+        *gslcs_root.rglob("*.h5"), *gslcs_root.rglob("*.H5"),
+        *gslcs_root.rglob("*.hdf5"), *gslcs_root.rglob("*.HDF5"),
+    })
+    # Static layers are geometry metadata, not an acquisition image.
+    scene_files = [path for path in scene_files if not path.name.lower().startswith("static_layers")]
     stacks: dict[Path, list[Path]] = {}
-    for slc_file in slc_files:
+    for scene_file in scene_files:
         # SWEETS stack folders typically look like t173_370317_iw2.  Find the
         # nearest such ancestor so date subfolders never affect discovery.
         stack = next(
-            (parent for parent in slc_file.parents
+            (parent for parent in scene_file.parents
              if parent != gslcs_root and re.match(r"^t\d+_", parent.name, re.IGNORECASE)),
-            slc_file.parent,
+            scene_file.parent,
         )
-        stacks.setdefault(stack, []).append(slc_file)
+        stacks.setdefault(stack, []).append(scene_file)
     candidates = sorted(stack for stack, files in stacks.items() if len(files) >= 2)
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
         raise FileNotFoundError(
-            f"No stack with at least two SWEETS *.slc.tif files found below {gslcs_root}. "
-            f"Found {len(slc_files)} SLC file(s)."
+            f"No stack with at least two SWEETS SLC/CSLC scene files found below {gslcs_root}. "
+            f"Found {len(scene_files)} candidate file(s)."
         )
     found = ", ".join(str(path) for path in candidates)
     raise ValueError(
