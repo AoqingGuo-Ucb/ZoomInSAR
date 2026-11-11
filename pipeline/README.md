@@ -237,6 +237,15 @@ This replaces the time-series results in that output folder. Keep a copy first
 if needed, then rerun the automatic comparison. Select the sign using the
 matched-track, matched-period point series—not by merely reversing a colourbar.
 
+### SWEETS DEM discovery
+
+When `--sweets-dem` is omitted, ZoomInSAR automatically uses either the legacy
+`work/dem.tif` layout or a downloaded raster anywhere inside the current SWEETS
+project layout, `<project>/dem/` (for example, `dem/<name>/dem.tif`). The
+selected file is printed as `Using DEM: ...` at
+startup. Supply `--sweets-dem /path/to/file.tif` only when a project contains
+several DEM mosaics and you need to choose one explicitly.
+
 ### Optional SLC/GSLC pixel-offset tracking
 
 Pixel-offset tracking (POT) is an optional, amplitude-based branch for large or

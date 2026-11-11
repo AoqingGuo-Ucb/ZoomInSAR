@@ -34,11 +34,28 @@ def venv_python(project: Path) -> Path:
 
 
 def sweets_dem_from_directory(sweets_dir: Path) -> Path | None:
-    """Find SWEETS' work-level DEM from an output directory or a descendant."""
-    return next(
-        (path / "dem.tif" for path in (sweets_dir, *sweets_dir.parents) if (path / "dem.tif").is_file()),
-        None,
-    )
+    """Find a DEM in legacy or current SWEETS project layouts.
+
+    Older runs save ``work/dem.tif``.  Current SWEETS project layouts may save
+    the downloaded raster beneath ``<project>/dem/`` instead.
+    """
+    for path in (sweets_dir, *sweets_dir.parents):
+        direct = path / "dem.tif"
+        if direct.is_file():
+            return direct
+        dem_directory = path / "dem"
+        if not dem_directory.is_dir():
+            continue
+        candidates = sorted(
+            child for child in dem_directory.rglob("*")
+            if child.is_file() and child.suffix.lower() in {".tif", ".tiff", ".vrt"}
+        )
+        if candidates:
+            # A SWEETS project normally has one downloaded DEM mosaic.  Prefer
+            # a conventional dem.tif name, otherwise the largest raster.
+            named = next((candidate for candidate in candidates if candidate.name.lower() == "dem.tif"), None)
+            return named or max(candidates, key=lambda candidate: candidate.stat().st_size)
+    return None
 
 
 def saved_sweets_directory(dataset: str | None, data_root: Path) -> Path | None:
@@ -455,6 +472,8 @@ def main() -> None:
     inferred_sweets_dem = sweets_dem_from_directory(sweets_path) if sweets_path else None
     inferred_sweets_dem = inferred_sweets_dem or default_dem
     dem = Path(args.sweets_dem).expanduser() if args.sweets_dem else inferred_sweets_dem
+    if args.source == "sweets":
+        print(f"Using DEM: {dem}", flush=True)
 
     unwrap_dir = ROOT / "InSAR_Unwrapping"
     cropper_dir = ROOT / "InSAR_KML_Cropper"
