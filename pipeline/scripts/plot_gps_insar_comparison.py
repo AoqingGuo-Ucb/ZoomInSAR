@@ -416,9 +416,13 @@ def automatic_hdf5_look_vector(project_root: Path, longitude: float, latitude: f
         {path for root in roots for path in (*root.rglob("*.h5"), *root.rglob("*.H5"))},
         key=lambda path: ("static" not in path.name.lower(), str(path)),
     )
+    # In a NISAR GSLC metadata cube, losUnitVectorX and losUnitVectorY are
+    # explicitly the east and north ENU components from target to sensor.
+    # The upward component is not stored and is derived from unit length.
     aliases = {
-        "east": {"loseast", "loseeast", "losee"}, "north": {"losnorth", "losn"}, "up": {"losup", "losu"},
-        "x": {"losunitvectorx", "lookvectorx"}, "y": {"losunitvectory", "lookvectory"}, "z": {"losunitvectorz", "lookvectorz"},
+        "east": {"loseast", "loseeast", "losee", "losunitvectorx", "lookvectorx"},
+        "north": {"losnorth", "losn", "losunitvectory", "lookvectory"},
+        "up": {"losup", "losu", "losunitvectorz", "lookvectorz"},
     }
     for path in files:
         try:
@@ -432,7 +436,7 @@ def automatic_hdf5_look_vector(project_root: Path, longitude: float, latitude: f
                         if normalized in names and component not in candidates:
                             candidates[component] = name
                 handle.visititems(visit)
-                if not ({"east", "north"}.issubset(candidates) or {"x", "y", "z"}.issubset(candidates)):
+                if not {"east", "north"}.issubset(candidates):
                     continue
                 values = {key: np.asarray(handle[name][...], dtype=float) for key, name in candidates.items()}
                 # Geometry grids are normally co-registered. If latitude and longitude
@@ -455,26 +459,13 @@ def automatic_hdf5_look_vector(project_root: Path, longitude: float, latitude: f
                 def sample(component: str) -> float:
                     array = values[component]
                     return float(array[index]) if index is not None and array.shape == base.shape else float(np.nanmedian(array))
-                if {"east", "north"}.issubset(values):
-                    vector = np.array([sample("east"), sample("north"), sample("up") if "up" in values else np.nan])
-                    if not math.isfinite(vector[2]):
-                        vector[2] = math.sqrt(max(0.0, 1.0 - vector[0] ** 2 - vector[1] ** 2))
-                else:
-                    x, y, z = sample("x"), sample("y"), sample("z")
-                    lon_rad, lat_rad = math.radians(longitude), math.radians(latitude)
-                    vector = np.array([
-                        -math.sin(lon_rad) * x + math.cos(lon_rad) * y,
-                        -math.sin(lat_rad) * math.cos(lon_rad) * x - math.sin(lat_rad) * math.sin(lon_rad) * y + math.cos(lat_rad) * z,
-                        math.cos(lat_rad) * math.cos(lon_rad) * x + math.cos(lat_rad) * math.sin(lon_rad) * y + math.sin(lat_rad) * z,
-                    ])
+                vector = np.array([sample("east"), sample("north"), sample("up") if "up" in values else np.nan])
+                if not math.isfinite(vector[2]):
+                    vector[2] = math.sqrt(max(0.0, 1.0 - vector[0] ** 2 - vector[1] ** 2))
                 magnitude = float(np.linalg.norm(vector))
                 if not math.isfinite(magnitude) or magnitude == 0:
                     continue
                 vector /= magnitude
-                # A ground-to-satellite vector must have an upward component. Some
-                # products store the opposite radar-to-ground direction.
-                if vector[2] < 0:
-                    vector *= -1.0
                 sampling = "nearest geolocation-grid point" if index is not None else "spatial median"
                 return vector, f"GSLC geometry ({sampling}): {path}"
         except (OSError, ValueError):
