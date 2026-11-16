@@ -28,6 +28,8 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 import numpy as np
 import rasterio
+import h5py
+from rasterio.crs import CRS
 
 
 PAIR_PATTERN = re.compile(r"(20\d{6})[_-](20\d{6})")
@@ -76,6 +78,85 @@ def read_baselines(path: Path) -> dict[datetime, float]:
     return result
 
 
+def _dataset_path(handle: h5py.File, ending: str, required_text: str = "") -> str | None:
+    """Find one HDF5 dataset by final name and a distinguishing parent path."""
+    matches: list[str] = []
+    def visit(name: str, item: object) -> None:
+        if isinstance(item, h5py.Dataset) and name.lower().endswith(ending.lower()) and required_text.lower() in name.lower():
+            matches.append(name)
+    handle.visititems(visit)
+    return sorted(matches)[0] if matches else None
+
+
+def _array(handle: h5py.File, ending: str, parent: str = "") -> np.ndarray:
+    name = _dataset_path(handle, ending, parent)
+    if not name:
+        raise ValueError(f"Missing HDF5 dataset ending in {ending} under {parent or '/'}")
+    return np.asarray(handle[name][...], dtype=float)
+
+
+def _ecef_los_from_enu(east: float, north: float, up: float, longitude: float, latitude: float) -> np.ndarray:
+    """Rotate a local ENU look vector into Earth-centred Earth-fixed coordinates."""
+    lon, lat = np.deg2rad([longitude, latitude])
+    east_axis = np.array([-np.sin(lon), np.cos(lon), 0.0])
+    north_axis = np.array([-np.sin(lat) * np.cos(lon), -np.sin(lat) * np.sin(lon), np.cos(lat)])
+    up_axis = np.array([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+    vector = east * east_axis + north * north_axis + up * up_axis
+    return vector / np.linalg.norm(vector)
+
+
+def _scene_baseline_geometry(path: Path) -> tuple[datetime, np.ndarray, np.ndarray, np.ndarray]:
+    """Return date, satellite ECEF position, LOS ECEF, and along-track vector."""
+    date = datetime.strptime(PAIR_PATTERN.search(path.name).group(1), "%Y%m%d") if PAIR_PATTERN.search(path.name) else datetime.strptime(re.search(r"(20\d{6})", path.name).group(1), "%Y%m%d")
+    with h5py.File(path, "r") as handle:
+        orbit_time = _array(handle, "/time", "/metadata/orbit")
+        position = _array(handle, "/position", "/metadata/orbit")
+        velocity = _array(handle, "/velocity", "/metadata/orbit")
+        zero_doppler = _array(handle, "/zeroDopplerAzimuthTime", "/metadata/radarGrid")
+        los_east = _array(handle, "/losUnitVectorX", "/metadata/radarGrid")
+        los_north = _array(handle, "/losUnitVectorY", "/metadata/radarGrid")
+        x_coordinates = _array(handle, "/xCoordinates", "/metadata/radarGrid")
+        y_coordinates = _array(handle, "/yCoordinates", "/metadata/radarGrid")
+        projection_name = _dataset_path(handle, "/projection", "/metadata/radarGrid")
+        if not projection_name:
+            raise ValueError("Missing radarGrid projection")
+        projection_raw = handle[projection_name][()]
+        projection_text = projection_raw.decode() if isinstance(projection_raw, bytes) else str(projection_raw)
+    height_index, row, col = (size // 2 for size in zero_doppler.shape)
+    time_value = float(zero_doppler[height_index, row, col])
+    satellite = np.array([np.interp(time_value, orbit_time, position[:, component]) for component in range(3)])
+    along_track = np.array([np.interp(time_value, orbit_time, velocity[:, component]) for component in range(3)])
+    # Metadata-cube x/y postings align with its column/row dimensions.
+    x_value, y_value = float(x_coordinates[col]), float(y_coordinates[row])
+    longitude, latitude = transform(CRS.from_user_input(projection_text), "EPSG:4326", [x_value], [y_value])
+    east, north = float(los_east[height_index, row, col]), float(los_north[height_index, row, col])
+    up = np.sqrt(max(0.0, 1.0 - east * east - north * north))
+    return date, satellite, _ecef_los_from_enu(east, north, up, longitude[0], latitude[0]), along_track / np.linalg.norm(along_track)
+
+
+def auto_nisar_baselines(project_root: Path, dates: list[datetime]) -> dict[datetime, float]:
+    """Compute signed effective perpendicular baselines from NISAR GSLC metadata."""
+    h5_files = sorted({*project_root.rglob("*.h5"), *project_root.rglob("*.H5")})
+    by_date: dict[datetime, Path] = {}
+    for path in h5_files:
+        match = re.search(r"NISAR_L2_.*?(20\d{6})T", path.name)
+        if match:
+            by_date.setdefault(datetime.strptime(match.group(1), "%Y%m%d"), path)
+    missing = [date for date in dates if date not in by_date]
+    if missing:
+        raise ValueError(f"No NISAR GSLC file was found for {len(missing)} interferogram acquisition date(s)")
+    geometry = {date: _scene_baseline_geometry(by_date[date]) for date in dates}
+    reference_date = dates[0]
+    _, reference_position, reference_los, reference_track = geometry[reference_date]
+    cross_track = np.cross(reference_los, reference_track)
+    cross_track /= np.linalg.norm(cross_track)
+    baselines = {reference_date: 0.0}
+    for date in dates[1:]:
+        _, satellite, _, _ = geometry[date]
+        baselines[date] = float(np.dot(satellite - reference_position, cross_track))
+    return baselines
+
+
 def parse_pair(path: Path) -> tuple[datetime, datetime]:
     match = PAIR_PATTERN.search(path.name)
     if not match:
@@ -115,6 +196,14 @@ def main() -> None:
         raise ValueError("No coherence raster contains valid values in [0, 1]")
     dates = sorted({date for first, second, _, _ in records for date in (first, second)})
     baselines = read_baselines(args.baseline_csv) if args.baseline_csv else None
+    baseline_source = str(args.baseline_csv) if args.baseline_csv else None
+    if baselines is None and args.project_root:
+        try:
+            baselines = auto_nisar_baselines(root, dates)
+            baseline_source = "calculated from NISAR GSLC orbit and radar-grid LOS metadata"
+            print("Calculated effective perpendicular baselines from NISAR GSLC metadata")
+        except (OSError, ValueError, KeyError, IndexError) as error:
+            print(f"NISAR perpendicular-baseline calculation unavailable: {error}")
     if baselines:
         missing = [date.strftime("%Y-%m-%d") for date in dates if date not in baselines]
         if missing:
@@ -158,7 +247,7 @@ def main() -> None:
             writer.writerow({"reference_date": first.date(), "secondary_date": second.date(), "mean_coherence": f"{coherence:.6f}", "coherence_file": path})
     (output_dir / "network_plot_summary.json").write_text(json.dumps({
         "interferograms": len(records), "acquisitions": len(dates), "vertical_axis": ylabel,
-        "coherence_directory": str(coherence_files[0].parent), "baseline_csv": str(args.baseline_csv) if args.baseline_csv else None,
+        "coherence_directory": str(coherence_files[0].parent), "baseline_source": baseline_source,
     }, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote network figure: {figure_path}")
     print(f"Wrote coherence table: {csv_path}")
