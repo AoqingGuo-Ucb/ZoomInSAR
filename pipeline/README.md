@@ -129,6 +129,19 @@ python3 scripts/plot_gps_insar_comparison.py \
   --look-azimuth-deg YOUR_GROUND_TO_SATELLITE_AZIMUTH_DEGREES
 ```
 
+To process every usable monument in the posting, replace `--station AB50` with
+`--all-stations`. The script creates one GPS–InSAR figure, CSV, and JSON
+summary per station, and also creates:
+
+```text
+GPS_InSAR_Comparison/gps_stations_on_mean_los_velocity.png
+```
+
+This map shows the ZoomInSAR mean LOS velocity with every successfully compared
+GPS station plotted as a labelled red marker. Stations without a temporal
+overlap or a usable nearest InSAR series are listed as skipped in
+`all_stations_summary.json`; processing continues for the other stations.
+
 Alternatively, use the three vector components:
 
 ```bash

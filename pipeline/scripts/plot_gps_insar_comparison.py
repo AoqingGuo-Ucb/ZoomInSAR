@@ -23,7 +23,7 @@ import math
 import re
 import sys
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -117,8 +117,8 @@ def numeric(value: str | None) -> float | None:
         return None
 
 
-def parse_portuguese_bend_posting(path: Path, station: str) -> list[GpsObservation]:
-    """Extract a station's dated North/East/Elevation coordinate solutions."""
+def parse_portuguese_bend_posting(path: Path) -> dict[str, list[GpsObservation]]:
+    """Extract all stations' dated North/East/Elevation coordinate solutions."""
     rows = read_xlsx_cells(path)
     header = rows.get(11, {})
     position_columns: list[tuple[int, datetime]] = []
@@ -133,26 +133,32 @@ def parse_portuguese_bend_posting(path: Path, station: str) -> list[GpsObservati
     if not position_columns:
         raise ValueError("Could not find dated coordinate blocks in workbook row 11")
 
-    expected = station.strip().upper()
-    observations: list[GpsObservation] = []
+    observations_by_station: dict[str, list[GpsObservation]] = {}
     for north_column, date in position_columns:
         station_column = north_column - 1
         for row_number, row in rows.items():
-            if row_number < 14 or row.get(station_column, "").strip().upper() != expected:
+            if row_number < 14:
+                continue
+            station = row.get(station_column, "").strip().upper()
+            if not station:
                 continue
             north_ft = numeric(row.get(north_column))
             east_ft = numeric(row.get(north_column + 1))
             elevation_ft = numeric(row.get(north_column + 2))
             if None not in (north_ft, east_ft, elevation_ft):
-                observations.append(GpsObservation(date, expected, north_ft, east_ft, elevation_ft))
-            break
+                observations_by_station.setdefault(station, []).append(
+                    GpsObservation(date, station, north_ft, east_ft, elevation_ft)
+                )
 
     # Later report pages occasionally repeat a survey date.  Keep the last
     # complete coordinate solution for that date, then sort chronologically.
-    by_date = {observation.date: observation for observation in observations}
-    result = sorted(by_date.values(), key=lambda observation: observation.date)
-    if len(result) < 2:
-        raise ValueError(f"Fewer than two usable observations found for station {expected}")
+    result: dict[str, list[GpsObservation]] = {}
+    for station, observations in observations_by_station.items():
+        by_date = {observation.date: observation for observation in observations}
+        if len(by_date) >= 2:
+            result[station] = sorted(by_date.values(), key=lambda observation: observation.date)
+    if not result:
+        raise ValueError("No station has at least two usable survey observations")
     return result
 
 
@@ -190,7 +196,8 @@ def valid_geo(longitude: np.ndarray, latitude: np.ndarray) -> np.ndarray:
     )
 
 
-def load_insar_point(project_root: Path, dataset: str | None, longitude: float, latitude: float) -> dict:
+def load_insar_grid(project_root: Path, dataset: str | None) -> dict:
+    """Open the InSAR grid once so multiple GPS stations share it."""
     results_root, output_dir, dataset_name = resolve_dataset(project_root, dataset)
     velocity = np.load(output_dir / "mean_los_velocity_m_per_year.npy", mmap_mode="r")
     shape = tuple(velocity.shape)
@@ -205,20 +212,38 @@ def load_insar_point(project_root: Path, dataset: str | None, longitude: float, 
     valid = valid_geo(lon, lat)
     if not np.any(valid):
         raise ValueError("No valid longitude/latitude values in the InSAR GEO directory")
+    return {
+        "dataset": dataset_name,
+        "velocity_m_per_year": velocity,
+        "longitude_grid": lon,
+        "latitude_grid": lat,
+        "valid_geo": valid,
+        "shape": shape,
+        "dates": np.array(dates, dtype="datetime64[ns]"),
+        "stack": stack,
+    }
+
+
+def load_insar_point(insar_grid: dict, longitude: float, latitude: float) -> dict:
+    """Extract the nearest valid InSAR time series from an opened grid."""
+    lon = insar_grid["longitude_grid"]
+    lat = insar_grid["latitude_grid"]
+    valid = insar_grid["valid_geo"]
+    shape = insar_grid["shape"]
     distance_squared = np.where(valid, (lon - longitude) ** 2 + (lat - latitude) ** 2, np.inf)
     row, column = np.unravel_index(np.argmin(distance_squared), shape)
     distance_m = math.sqrt(float(distance_squared[row, column])) * 111_000.0
-    series_m = np.asarray(stack[:, row, column], dtype=float)
+    series_m = np.asarray(insar_grid["stack"][:, row, column], dtype=float)
     if not np.any(np.isfinite(series_m)):
         raise ValueError("The nearest valid geographic InSAR pixel has no finite time-series values")
     return {
-        "dataset": dataset_name,
+        "dataset": insar_grid["dataset"],
         "row": int(row),
         "column": int(column),
         "longitude": float(lon[row, column]),
         "latitude": float(lat[row, column]),
         "distance_m": distance_m,
-        "dates": np.array(dates, dtype="datetime64[ns]"),
+        "dates": insar_grid["dates"],
         "displacement_m": series_m,
     }
 
@@ -276,10 +301,48 @@ def plot_comparison(
     plt.close(fig)
 
 
+def plot_station_velocity_map(output_path: Path, insar_grid: dict, stations: dict[str, tuple[float, float]]) -> None:
+    """Plot mean LOS velocity and all GPS station locations in geographic space."""
+    longitude = insar_grid["longitude_grid"]
+    latitude = insar_grid["latitude_grid"]
+    velocity = np.asarray(insar_grid["velocity_m_per_year"], dtype=float) * 1000.0
+    valid = insar_grid["valid_geo"] & np.isfinite(velocity)
+    if not np.any(valid):
+        raise ValueError("No finite mean LOS velocity values for the station map")
+    lon_values, lat_values, velocity_values = longitude[valid], latitude[valid], velocity[valid]
+    # Keep the figure responsive for very large results while retaining a
+    # regular geographic sample; this does not alter any station comparison.
+    if lon_values.size > 180_000:
+        sample = np.linspace(0, lon_values.size - 1, 180_000).astype(int)
+        lon_values, lat_values, velocity_values = lon_values[sample], lat_values[sample], velocity_values[sample]
+    limit = max(float(np.nanpercentile(np.abs(velocity_values), 98)), 1.0)
+    fig, axis = plt.subplots(figsize=(10, 8), layout="constrained")
+    points = axis.scatter(
+        lon_values, lat_values, c=velocity_values, s=5, cmap="RdBu_r", vmin=-limit, vmax=limit,
+        marker="s", linewidths=0, rasterized=True,
+    )
+    for station, (longitude_value, latitude_value) in sorted(stations.items()):
+        axis.scatter(longitude_value, latitude_value, s=62, facecolor="#e31a1c", edgecolor="white", linewidth=1.3, zorder=3)
+        axis.annotate(station, (longitude_value, latitude_value), xytext=(5, 5), textcoords="offset points",
+                      fontsize=7, color="black", weight="bold", zorder=4,
+                      bbox={"facecolor": "white", "alpha": 0.72, "edgecolor": "none", "pad": 0.5})
+    colorbar = fig.colorbar(points, ax=axis, shrink=0.84, pad=0.02)
+    colorbar.set_label("Mean LOS velocity (mm/year; + toward satellite)")
+    axis.set_title(f"ZoomInSAR mean LOS velocity with GPS stations ({insar_grid['dataset'].removeprefix('Dataset_')})")
+    axis.set_xlabel("Longitude")
+    axis.set_ylabel("Latitude")
+    axis.set_aspect("equal", adjustable="box")
+    axis.grid(alpha=0.2)
+    fig.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gps-xlsx", required=True, type=Path, help="Portuguese Bend movement-posting workbook")
-    parser.add_argument("--station", required=True, help="GPS monitoring-point identifier, e.g. AB50")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--station", help="One GPS monitoring-point identifier, e.g. AB50")
+    selection.add_argument("--all-stations", action="store_true", help="Process every station with at least two usable survey observations")
     parser.add_argument("--project-root", required=True, type=Path, help="Project containing ZoomInSAR_Results")
     parser.add_argument("--dataset", help="Dataset name without Dataset_; auto-detected only if one is present")
     parser.add_argument("--output-dir", type=Path, help="Default: <project-root>/ZoomInSAR_Results/GPS_InSAR_Comparison")
@@ -325,10 +388,15 @@ def look_vector(args: argparse.Namespace) -> np.ndarray:
     return vector / magnitude
 
 
-def main() -> None:
-    args = parse_args()
-    vector = look_vector(args)
-    observations = parse_portuguese_bend_posting(args.gps_xlsx, args.station)
+def process_station(
+    station: str,
+    observations: list[GpsObservation],
+    args: argparse.Namespace,
+    vector: np.ndarray,
+    insar_grid: dict,
+    output_dir: Path,
+) -> tuple[float, float]:
+    """Write one station's comparison products and return its longitude/latitude."""
     north_ft = np.array([item.north_ft for item in observations])
     east_ft = np.array([item.east_ft for item in observations])
     up_ft = np.array([item.elevation_ft for item in observations])
@@ -336,7 +404,7 @@ def main() -> None:
     # EPSG:2229 is a US-survey-foot CRS. Rasterio performs its native unit
     # conversion before returning WGS84 longitude/latitude.
     station_longitude, station_latitude = transform(args.gps_crs, "EPSG:4326", [east_ft[0]], [north_ft[0]])
-    insar = load_insar_point(args.project_root, args.dataset, station_longitude[0], station_latitude[0])
+    insar = load_insar_point(insar_grid, station_longitude[0], station_latitude[0])
 
     gps_enu_m = np.column_stack((
         (east_ft - east_ft[0]) * US_SURVEY_FOOT_TO_METRE,
@@ -360,7 +428,6 @@ def main() -> None:
     if not (math.isfinite(gps_zero) and math.isfinite(insar_zero)):
         raise ValueError("Cannot establish a common reference date within the data overlap")
     gps_los_relative = gps_los_m - gps_zero
-    gps_enu_relative = gps_enu_m - interpolation_values(gps_days, gps_enu_m[:, 0], np.array([overlap_start]))[0] * np.array([1.0, 0.0, 0.0])
     # Re-reference all three ENU components at the same comparison epoch.
     gps_enu_relative = gps_enu_m - np.array([
         interpolation_values(gps_days, gps_enu_m[:, index], np.array([overlap_start]))[0]
@@ -378,10 +445,7 @@ def main() -> None:
     matched = np.isfinite(residual)
     rmse_mm = float(np.sqrt(np.mean(residual[matched] ** 2)) * 1000.0) if np.any(matched) else None
 
-    results_root, _, _ = resolve_dataset(args.project_root, args.dataset)
-    output_dir = args.output_dir or results_root / "GPS_InSAR_Comparison"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_station = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.station.strip())
+    safe_station = re.sub(r"[^A-Za-z0-9_.-]+", "_", station)
     figure_path = output_dir / f"gps_insar_{safe_station}.png"
     csv_path = output_dir / f"gps_projected_los_{safe_station}.csv"
     summary_path = output_dir / f"gps_insar_{safe_station}_summary.json"
@@ -399,7 +463,7 @@ def main() -> None:
                 "up_m": f"{enu[2]:.6f}", "gps_los_m": f"{los:.6f}",
             })
     summary = {
-        "station": args.station.strip().upper(), "gps_workbook": str(args.gps_xlsx.resolve()),
+        "station": station, "gps_workbook": str(args.gps_xlsx.resolve()),
         "gps_crs": args.gps_crs, "gps_station_longitude": station_longitude[0], "gps_station_latitude": station_latitude[0],
         "los_unit_vector_ground_to_satellite_ENU": {"east": vector[0], "north": vector[1], "up": vector[2]},
         "positive_los_direction": "toward satellite", "comparison_start": str(np.datetime64(int(overlap_start), "D")),
@@ -414,6 +478,48 @@ def main() -> None:
     print(f"Wrote figure: {figure_path}")
     print(f"Wrote GPS LOS table: {csv_path}")
     print(f"Wrote summary: {summary_path}")
+    return station_longitude[0], station_latitude[0]
+
+
+def main() -> None:
+    args = parse_args()
+    vector = look_vector(args)
+    observations_by_station = parse_portuguese_bend_posting(args.gps_xlsx)
+    if args.station:
+        station = args.station.strip().upper()
+        if station not in observations_by_station:
+            available = ", ".join(sorted(observations_by_station))
+            raise ValueError(f"No usable observations found for {station}. Available stations: {available}")
+        selected = {station: observations_by_station[station]}
+    else:
+        selected = observations_by_station
+
+    results_root, _, _ = resolve_dataset(args.project_root, args.dataset)
+    output_dir = args.output_dir or results_root / "GPS_InSAR_Comparison"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    insar_grid = load_insar_grid(args.project_root, args.dataset)
+    station_locations: dict[str, tuple[float, float]] = {}
+    failures: dict[str, str] = {}
+    for station, observations in sorted(selected.items()):
+        try:
+            station_locations[station] = process_station(station, observations, args, vector, insar_grid, output_dir)
+        except ValueError as error:
+            # A station can legitimately fall outside the InSAR time span or
+            # on an invalid pixel. Continue through the remaining stations.
+            failures[station] = str(error)
+            print(f"Skipped {station}: {error}")
+
+    if not station_locations:
+        raise ValueError("No station produced a GPS–InSAR comparison")
+    station_map = output_dir / "gps_stations_on_mean_los_velocity.png"
+    plot_station_velocity_map(station_map, insar_grid, station_locations)
+    print(f"Wrote station map: {station_map}")
+    if args.all_stations:
+        (output_dir / "all_stations_summary.json").write_text(json.dumps({
+            "processed_stations": sorted(station_locations), "skipped_stations": failures,
+            "station_locations": {name: {"longitude": point[0], "latitude": point[1]} for name, point in station_locations.items()},
+        }, indent=2) + "\n", encoding="utf-8")
+        print(f"Completed {len(station_locations)} stations; skipped {len(failures)} stations")
 
 
 if __name__ == "__main__":
