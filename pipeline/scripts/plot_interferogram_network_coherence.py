@@ -106,6 +106,22 @@ def _ecef_los_from_enu(east: float, north: float, up: float, longitude: float, l
     return vector / np.linalg.norm(vector)
 
 
+def _projection_crs(value: object) -> CRS:
+    """Read the GSLC projection scalar as an EPSG code, EPSG text, or WKT."""
+    if isinstance(value, np.ndarray) and value.shape == ():
+        value = value.item()
+    if isinstance(value, (bytes, np.bytes_)):
+        value = value.decode("utf-8")
+    if isinstance(value, (int, np.integer)):
+        return CRS.from_epsg(int(value))
+    text = str(value).strip()
+    if text.isdigit():
+        return CRS.from_epsg(int(text))
+    if text.lower().startswith("epsg:"):
+        return CRS.from_epsg(int(text.split(":", 1)[1]))
+    return CRS.from_user_input(text)
+
+
 def _scene_baseline_geometry(path: Path) -> tuple[datetime, np.ndarray, np.ndarray, np.ndarray]:
     """Return date, satellite ECEF position, LOS ECEF, and along-track vector."""
     date = datetime.strptime(PAIR_PATTERN.search(path.name).group(1), "%Y%m%d") if PAIR_PATTERN.search(path.name) else datetime.strptime(re.search(r"(20\d{6})", path.name).group(1), "%Y%m%d")
@@ -122,14 +138,13 @@ def _scene_baseline_geometry(path: Path) -> tuple[datetime, np.ndarray, np.ndarr
         if not projection_name:
             raise ValueError("Missing radarGrid projection")
         projection_raw = handle[projection_name][()]
-        projection_text = projection_raw.decode() if isinstance(projection_raw, bytes) else str(projection_raw)
     height_index, row, col = (size // 2 for size in zero_doppler.shape)
     time_value = float(zero_doppler[height_index, row, col])
     satellite = np.array([np.interp(time_value, orbit_time, position[:, component]) for component in range(3)])
     along_track = np.array([np.interp(time_value, orbit_time, velocity[:, component]) for component in range(3)])
     # Metadata-cube x/y postings align with its column/row dimensions.
     x_value, y_value = float(x_coordinates[col]), float(y_coordinates[row])
-    longitude, latitude = transform(CRS.from_user_input(projection_text), "EPSG:4326", [x_value], [y_value])
+    longitude, latitude = transform(_projection_crs(projection_raw), "EPSG:4326", [x_value], [y_value])
     east, north = float(los_east[height_index, row, col]), float(los_north[height_index, row, col])
     up = np.sqrt(max(0.0, 1.0 - east * east - north * north))
     return date, satellite, _ecef_los_from_enu(east, north, up, longitude[0], latitude[0]), along_track / np.linalg.norm(along_track)
