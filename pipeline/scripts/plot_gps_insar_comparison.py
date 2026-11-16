@@ -360,7 +360,12 @@ def _sample_geotiff(path: Path, longitude: float, latitude: float) -> float | No
 
 def automatic_look_vector(project_root: Path, longitude: float, latitude: float) -> tuple[np.ndarray, str]:
     """Find station-local ENU LOS layers produced with the project, if present."""
-    roots = [project_root / "work", project_root / "ZoomInSAR_Results" / "Data"]
+    # Results are commonly stored in <project>/processing/ZoomInSAR_Results
+    # while the SWEETS/GSLC inputs remain in <project>/work. Search both levels.
+    roots = [
+        project_root / "work", project_root / "ZoomInSAR_Results" / "Data",
+        project_root.parent / "work", project_root.parent / "processing" / "ZoomInSAR_Results" / "Data",
+    ]
     files: list[Path] = []
     for root in roots:
         if root.is_dir():
@@ -399,10 +404,18 @@ def automatic_hdf5_look_vector(project_root: Path, longitude: float, latitude: f
     """Read ENU or ECEF LOS-unit-vector layers from an HDF5 GSLC/static layer."""
     if h5py is None:
         raise ValueError("h5py is required to read LOS geometry from GSLC HDF5 files")
-    root = project_root / "work" / "gslcs"
-    if not root.is_dir():
-        raise ValueError("No GeoTIFF LOS layers found and work/gslcs is unavailable for GSLC geometry discovery")
-    files = sorted((*root.rglob("*.h5"), *root.rglob("*.H5")), key=lambda path: ("static" not in path.name.lower(), str(path)))
+    # NISAR project layouts vary: raw GSLC files can be in work/gslcs, an
+    # input/archive folder, or directly below the project root. The project
+    # root is small enough relative to the raw rasters that discovering HDF5
+    # metadata files recursively here is preferable to requiring a path.
+    roots = [project_root, project_root.parent]
+    roots = [root for root in roots if root.is_dir()]
+    if not roots:
+        raise ValueError("No project directory is available for GSLC geometry discovery")
+    files = sorted(
+        {path for root in roots for path in (*root.rglob("*.h5"), *root.rglob("*.H5"))},
+        key=lambda path: ("static" not in path.name.lower(), str(path)),
+    )
     aliases = {
         "east": {"loseast", "loseeast", "losee"}, "north": {"losnorth", "losn"}, "up": {"losup", "losu"},
         "x": {"losunitvectorx", "lookvectorx"}, "y": {"losunitvectory", "lookvectory"}, "z": {"losunitvectorz", "lookvectorz"},
