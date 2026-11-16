@@ -98,6 +98,51 @@ pairs, because unwrapping requires coherence. If you intentionally want to
 process only the complete pairs, add `--sweets-skip-unpaired`; excluded pairs
 are written to `crop_metadata.json` for traceability.
 
+## Compare a survey GPS time series with ZoomInSAR LOS
+
+`scripts/plot_gps_insar_comparison.py` compares one surveyed GPS monument with
+the nearest valid ZoomInSAR pixel. It reads the Portuguese Bend movement-posting
+workbook directly, including its repeated report-page layout, and writes the
+following files under `ZoomInSAR_Results/GPS_InSAR_Comparison` by default:
+
+- a figure with GPS east/north/up displacement and the GPS-versus-InSAR LOS
+  time series;
+- a CSV of the GPS ENU and projected LOS values; and
+- a JSON summary recording the selected InSAR pixel, common time span, and LOS
+  geometry.
+
+GPS and InSAR cannot be compared by plotting GPS vertical displacement against
+LOS displacement. The script therefore projects the GPS east, north, and up
+displacements onto the satellite line of sight. Supply the **actual local
+ground-to-satellite** unit vector from the SAR product metadata. Positive LOS
+is then defined as motion **toward the satellite**, which is the ZoomInSAR
+convention. You can provide the vector directly, or provide local incidence
+angle and ground-to-satellite look azimuth (clockwise from north):
+
+```bash
+python3 scripts/plot_gps_insar_comparison.py \
+  --gps-xlsx "/path/to/PB MOVEMENT DATA POSTING.xlsx" \
+  --station AB50 \
+  --project-root /path/to/PBLC_NISAR_stack \
+  --dataset PBLC_NISAR_stack \
+  --incidence-deg YOUR_LOCAL_INCIDENCE_DEGREES \
+  --look-azimuth-deg YOUR_GROUND_TO_SATELLITE_AZIMUTH_DEGREES
+```
+
+Alternatively, use the three vector components:
+
+```bash
+  --look-east EAST_COMPONENT --look-north NORTH_COMPONENT --look-up UP_COMPONENT
+```
+
+The supplied Portuguese Bend workbook declares `NAD83 California State Plane
+Zone 5 (US feet)`, so the default `--gps-crs EPSG:2229` is appropriate. Change
+it only if a future survey workbook declares a different coordinate reference
+system. The plotted series are re-referenced to the first instant shared by
+GPS and InSAR. The script does not extrapolate either data set; it uses linear
+interpolation only to establish that common reference and to calculate the
+optional same-date residual statistic recorded in the JSON summary.
+
 ## Compare ASF/OPERA and ZoomInSAR products
 
 `scripts/plot_asf_zoomin_comparison.py` makes three PyGMT figures: ASF/OPERA
