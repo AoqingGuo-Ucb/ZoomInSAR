@@ -165,6 +165,29 @@ GPS and InSAR. The script does not extrapolate either data set; it uses linear
 interpolation only to establish that common reference and to calculate the
 optional same-date residual statistic recorded in the JSON summary.
 
+## Plot an interferogram network coloured by coherence
+
+`scripts/plot_interferogram_network_coherence.py` creates an acquisition
+network in which every interferogram link is coloured by the mean value in its
+matching `*.int.cor.tif` coherence raster. It also writes a CSV table of the
+computed pair coherences. To search a project automatically:
+
+```bash
+python3 scripts/plot_interferogram_network_coherence.py \
+  --project-root /path/to/project/processing
+```
+
+Without perpendicular-baseline metadata, the vertical axis is explicitly
+labelled *Acquisition order*; it is not a physical baseline. For a true
+perpendicular-baseline plot, provide a CSV with `date` and
+`perpendicular_baseline_m` columns:
+
+```bash
+python3 scripts/plot_interferogram_network_coherence.py \
+  --project-root /path/to/project/processing \
+  --baseline-csv /path/to/perpendicular_baselines.csv
+```
+
 ## Compare ASF/OPERA and ZoomInSAR products
 
 `scripts/plot_asf_zoomin_comparison.py` makes three PyGMT figures: ASF/OPERA
