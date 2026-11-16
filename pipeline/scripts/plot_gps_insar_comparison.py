@@ -35,7 +35,13 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+import rasterio
 from rasterio.warp import transform
+
+try:
+    import h5py
+except ImportError:  # The normal insar environment includes h5py.
+    h5py = None
 
 
 US_SURVEY_FOOT_TO_METRE = 1200.0 / 3937.0
@@ -337,6 +343,135 @@ def plot_station_velocity_map(output_path: Path, insar_grid: dict, stations: dic
     plt.close(fig)
 
 
+def _sample_geotiff(path: Path, longitude: float, latitude: float) -> float | None:
+    """Read one value from a georeferenced geometry GeoTIFF at lon/lat."""
+    with rasterio.open(path) as dataset:
+        if dataset.crs is None:
+            return None
+        x, y = transform("EPSG:4326", dataset.crs, [longitude], [latitude])
+        row, column = dataset.index(x[0], y[0])
+        if not (0 <= row < dataset.height and 0 <= column < dataset.width):
+            return None
+        value = float(dataset.read(1, window=((row, row + 1), (column, column + 1)))[0, 0])
+        if dataset.nodata is not None and np.isclose(value, dataset.nodata):
+            return None
+        return value if math.isfinite(value) else None
+
+
+def automatic_look_vector(project_root: Path, longitude: float, latitude: float) -> tuple[np.ndarray, str]:
+    """Find station-local ENU LOS layers produced with the project, if present."""
+    roots = [project_root / "work", project_root / "ZoomInSAR_Results" / "Data"]
+    files: list[Path] = []
+    for root in roots:
+        if root.is_dir():
+            files.extend(path for path in root.rglob("*.tif") if "los" in path.name.lower() or "look" in path.name.lower())
+    labels = {
+        "east": ("los_east", "look_east", "east_los"),
+        "north": ("los_north", "look_north", "north_los"),
+        "up": ("los_up", "look_up", "up_los"),
+    }
+    layers: dict[str, Path] = {}
+    for component, patterns in labels.items():
+        matches = [path for path in sorted(set(files)) if any(pattern in path.name.lower() for pattern in patterns)]
+        if matches:
+            layers[component] = matches[0]
+    if {"east", "north"}.issubset(layers):
+        east = _sample_geotiff(layers["east"], longitude, latitude)
+        north = _sample_geotiff(layers["north"], longitude, latitude)
+        up = _sample_geotiff(layers["up"], longitude, latitude) if "up" in layers else None
+        if east is None or north is None:
+            raise ValueError("Found LOS geometry layers, but they do not cover the GPS station or contain NoData there")
+        if up is None:
+            horizontal_squared = east * east + north * north
+            if horizontal_squared > 1.0 + 1e-4:
+                raise ValueError("LOS east/north geometry values are not a valid unit-vector pair")
+            up = math.sqrt(max(0.0, 1.0 - horizontal_squared))
+        vector = np.array([east, north, up], dtype=float)
+        magnitude = float(np.linalg.norm(vector))
+        if not math.isfinite(magnitude) or magnitude == 0:
+            raise ValueError("Automatically discovered LOS vector is invalid")
+        source = ", ".join(f"{component}={path}" for component, path in layers.items())
+        return vector / magnitude, source
+    return automatic_hdf5_look_vector(project_root, longitude, latitude)
+
+
+def automatic_hdf5_look_vector(project_root: Path, longitude: float, latitude: float) -> tuple[np.ndarray, str]:
+    """Read ENU or ECEF LOS-unit-vector layers from an HDF5 GSLC/static layer."""
+    if h5py is None:
+        raise ValueError("h5py is required to read LOS geometry from GSLC HDF5 files")
+    root = project_root / "work" / "gslcs"
+    if not root.is_dir():
+        raise ValueError("No GeoTIFF LOS layers found and work/gslcs is unavailable for GSLC geometry discovery")
+    files = sorted((*root.rglob("*.h5"), *root.rglob("*.H5")), key=lambda path: ("static" not in path.name.lower(), str(path)))
+    aliases = {
+        "east": {"loseast", "loseeast", "losee"}, "north": {"losnorth", "losn"}, "up": {"losup", "losu"},
+        "x": {"losunitvectorx", "lookvectorx"}, "y": {"losunitvectory", "lookvectory"}, "z": {"losunitvectorz", "lookvectorz"},
+    }
+    for path in files:
+        try:
+            with h5py.File(path, "r") as handle:
+                candidates: dict[str, str] = {}
+                def visit(name: str, item: object) -> None:
+                    if not isinstance(item, h5py.Dataset):
+                        return
+                    normalized = re.sub(r"[^a-z0-9]", "", name.rsplit("/", 1)[-1].lower())
+                    for component, names in aliases.items():
+                        if normalized in names and component not in candidates:
+                            candidates[component] = name
+                handle.visititems(visit)
+                if not ({"east", "north"}.issubset(candidates) or {"x", "y", "z"}.issubset(candidates)):
+                    continue
+                values = {key: np.asarray(handle[name][...], dtype=float) for key, name in candidates.items()}
+                # Geometry grids are normally co-registered. If latitude and longitude
+                # grids are present, sample the nearest geometry point to this station.
+                geo: dict[str, np.ndarray] = {}
+                def find_geo(name: str, item: object) -> None:
+                    if not isinstance(item, h5py.Dataset):
+                        return
+                    key = re.sub(r"[^a-z0-9]", "", name.rsplit("/", 1)[-1].lower())
+                    if key in {"latitude", "lat"} and "latitude" not in geo:
+                        geo["latitude"] = np.asarray(item[...], dtype=float)
+                    if key in {"longitude", "lon"} and "longitude" not in geo:
+                        geo["longitude"] = np.asarray(item[...], dtype=float)
+                handle.visititems(find_geo)
+                base = next(iter(values.values()))
+                index: tuple[int, ...] | None = None
+                if geo.get("latitude") is not None and geo.get("longitude") is not None and geo["latitude"].shape == base.shape and geo["longitude"].shape == base.shape:
+                    distance = (geo["latitude"] - latitude) ** 2 + (geo["longitude"] - longitude) ** 2
+                    index = np.unravel_index(np.nanargmin(distance), distance.shape)
+                def sample(component: str) -> float:
+                    array = values[component]
+                    return float(array[index]) if index is not None and array.shape == base.shape else float(np.nanmedian(array))
+                if {"east", "north"}.issubset(values):
+                    vector = np.array([sample("east"), sample("north"), sample("up") if "up" in values else np.nan])
+                    if not math.isfinite(vector[2]):
+                        vector[2] = math.sqrt(max(0.0, 1.0 - vector[0] ** 2 - vector[1] ** 2))
+                else:
+                    x, y, z = sample("x"), sample("y"), sample("z")
+                    lon_rad, lat_rad = math.radians(longitude), math.radians(latitude)
+                    vector = np.array([
+                        -math.sin(lon_rad) * x + math.cos(lon_rad) * y,
+                        -math.sin(lat_rad) * math.cos(lon_rad) * x - math.sin(lat_rad) * math.sin(lon_rad) * y + math.cos(lat_rad) * z,
+                        math.cos(lat_rad) * math.cos(lon_rad) * x + math.cos(lat_rad) * math.sin(lon_rad) * y + math.sin(lat_rad) * z,
+                    ])
+                magnitude = float(np.linalg.norm(vector))
+                if not math.isfinite(magnitude) or magnitude == 0:
+                    continue
+                vector /= magnitude
+                # A ground-to-satellite vector must have an upward component. Some
+                # products store the opposite radar-to-ground direction.
+                if vector[2] < 0:
+                    vector *= -1.0
+                sampling = "nearest geolocation-grid point" if index is not None else "spatial median"
+                return vector, f"GSLC geometry ({sampling}): {path}"
+        except (OSError, ValueError):
+            continue
+    raise ValueError(
+        "No usable LOS-vector layers were found in project geometry files. Supply explicit --look-east/--look-north/--look-up "
+        "from the NISAR/CSLC product metadata."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gps-xlsx", required=True, type=Path, help="Portuguese Bend movement-posting workbook")
@@ -356,7 +491,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def look_vector(args: argparse.Namespace) -> np.ndarray:
+def look_vector(
+    args: argparse.Namespace, longitude: float, latitude: float
+) -> tuple[np.ndarray, str]:
     components = (args.look_east, args.look_north, args.look_up)
     angle_values = (args.incidence_deg, args.look_azimuth_deg)
     component_mode = any(value is not None for value in components)
@@ -367,6 +504,7 @@ def look_vector(args: argparse.Namespace) -> np.ndarray:
         if any(value is None for value in components):
             raise ValueError("Provide all three LOS components: --look-east, --look-north, --look-up")
         vector = np.asarray(components, dtype=float)
+        source = "command-line ENU components"
     elif angle_mode:
         if any(value is None for value in angle_values):
             raise ValueError("Provide both --incidence-deg and --look-azimuth-deg")
@@ -377,22 +515,19 @@ def look_vector(args: argparse.Namespace) -> np.ndarray:
             math.sin(incidence) * math.cos(azimuth),
             math.cos(incidence),
         ])
+        source = "command-line incidence angle and ground-to-satellite azimuth"
     else:
-        raise ValueError(
-            "A real LOS geometry is required. Supply --look-east/--look-north/--look-up "
-            "from the product metadata, or --incidence-deg and --look-azimuth-deg."
-        )
+        return automatic_look_vector(args.project_root, longitude, latitude)
     magnitude = float(np.linalg.norm(vector))
     if not math.isfinite(magnitude) or magnitude == 0:
         raise ValueError("LOS vector must be finite and non-zero")
-    return vector / magnitude
+    return vector / magnitude, source
 
 
 def process_station(
     station: str,
     observations: list[GpsObservation],
     args: argparse.Namespace,
-    vector: np.ndarray,
     insar_grid: dict,
     output_dir: Path,
 ) -> tuple[float, float]:
@@ -404,6 +539,7 @@ def process_station(
     # EPSG:2229 is a US-survey-foot CRS. Rasterio performs its native unit
     # conversion before returning WGS84 longitude/latitude.
     station_longitude, station_latitude = transform(args.gps_crs, "EPSG:4326", [east_ft[0]], [north_ft[0]])
+    vector, geometry_source = look_vector(args, station_longitude[0], station_latitude[0])
     insar = load_insar_point(insar_grid, station_longitude[0], station_latitude[0])
 
     gps_enu_m = np.column_stack((
@@ -451,7 +587,7 @@ def process_station(
     summary_path = output_dir / f"gps_insar_{safe_station}_summary.json"
 
     plot_comparison(
-        figure_path, args.station.strip().upper(), gps_dates, gps_enu_relative, gps_los_relative,
+        figure_path, station, gps_dates, gps_enu_relative, gps_los_relative,
         insar_dates, insar_los_relative, insar["longitude"], insar["latitude"], insar["distance_m"],
     )
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
@@ -466,6 +602,7 @@ def process_station(
         "station": station, "gps_workbook": str(args.gps_xlsx.resolve()),
         "gps_crs": args.gps_crs, "gps_station_longitude": station_longitude[0], "gps_station_latitude": station_latitude[0],
         "los_unit_vector_ground_to_satellite_ENU": {"east": vector[0], "north": vector[1], "up": vector[2]},
+        "los_geometry_source": geometry_source,
         "positive_los_direction": "toward satellite", "comparison_start": str(np.datetime64(int(overlap_start), "D")),
         "comparison_end": str(np.datetime64(int(overlap_end), "D")), "dataset": insar["dataset"],
         "insar_pixel": {key: insar[key] for key in ("row", "column", "longitude", "latitude", "distance_m")},
@@ -483,7 +620,6 @@ def process_station(
 
 def main() -> None:
     args = parse_args()
-    vector = look_vector(args)
     observations_by_station = parse_portuguese_bend_posting(args.gps_xlsx)
     if args.station:
         station = args.station.strip().upper()
@@ -502,7 +638,7 @@ def main() -> None:
     failures: dict[str, str] = {}
     for station, observations in sorted(selected.items()):
         try:
-            station_locations[station] = process_station(station, observations, args, vector, insar_grid, output_dir)
+            station_locations[station] = process_station(station, observations, args, insar_grid, output_dir)
         except ValueError as error:
             # A station can legitimately fall outside the InSAR time span or
             # on an invalid pixel. Continue through the remaining stations.

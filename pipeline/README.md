@@ -113,18 +113,27 @@ following files under `ZoomInSAR_Results/GPS_InSAR_Comparison` by default:
 
 GPS and InSAR cannot be compared by plotting GPS vertical displacement against
 LOS displacement. The script therefore projects the GPS east, north, and up
-displacements onto the satellite line of sight. Supply the **actual local
-ground-to-satellite** unit vector from the SAR product metadata. Positive LOS
-is then defined as motion **toward the satellite**, which is the ZoomInSAR
-convention. You can provide the vector directly, or provide local incidence
-angle and ground-to-satellite look azimuth (clockwise from north):
+displacements onto the satellite line of sight. By default, it searches the
+project's GSLC/static geometry layers for local LOS-vector data and records the
+source in each JSON summary. Positive LOS is defined as motion **toward the
+satellite**, which is the ZoomInSAR convention.
+
+The normal automatic run needs no manually typed geometry parameters:
 
 ```bash
 python3 scripts/plot_gps_insar_comparison.py \
   --gps-xlsx "/path/to/PB MOVEMENT DATA POSTING.xlsx" \
   --station AB50 \
   --project-root /path/to/PBLC_NISAR_stack \
-  --dataset PBLC_NISAR_stack \
+  --dataset PBLC_NISAR_stack
+```
+
+If your source product does not retain usable LOS geometry layers, provide the
+**actual local ground-to-satellite** vector from its metadata. You can provide
+the vector directly, or provide local incidence angle and ground-to-satellite
+look azimuth (clockwise from north):
+
+```bash
   --incidence-deg YOUR_LOCAL_INCIDENCE_DEGREES \
   --look-azimuth-deg YOUR_GROUND_TO_SATELLITE_AZIMUTH_DEGREES
 ```
